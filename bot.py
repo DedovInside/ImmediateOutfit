@@ -12,7 +12,8 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 
 from config import settings
-from handlers import start, questionnaire, results
+from handlers import premium, profile, questionnaire, results, start
+from services import storage
 
 
 async def main() -> None:
@@ -34,11 +35,14 @@ async def main() -> None:
         default=DefaultBotProperties(parse_mode=ParseMode.HTML),
     )
     dp = Dispatcher(storage=MemoryStorage())
+    storage.init_db()
 
     # Регистрация роутеров
     dp.include_router(start.router)
     dp.include_router(questionnaire.router)
     dp.include_router(results.router)
+    dp.include_router(profile.router)
+    dp.include_router(premium.router)
 
     logging.info("🚀 Бот OutfitNow запущен!")
 
@@ -49,4 +53,3 @@ async def main() -> None:
 
 if __name__ == "__main__":
     asyncio.run(main())
-

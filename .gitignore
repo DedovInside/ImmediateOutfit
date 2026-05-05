@@ -26,3 +26,4 @@ build/
 
 Pipfile.lock
 poetry.lock
+.venv312/

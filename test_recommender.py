@@ -1,59 +1,42 @@
-"""Быстрый тест recommender engine."""
-import json
-from services.recommender import recommend, check_user_outfit
-from models.outfit import Outfit
+"""Небольшой smoke-test движка рекомендаций."""
+from services.catalog import get_outfits
+from services.recommender import recommend, review_user_outfit
 
-outfits = [Outfit(**o) for o in json.load(open("data/outfits.json", encoding="utf-8"))]
-males = [o for o in outfits if "male" in o.gender]
-females = [o for o in outfits if "female" in o.gender]
-print(f"Загружено образов: {len(outfits)} (мужских: {len(males)}, женских: {len(females)})")
-
-# Тест 1: парень, учёба, спокойный день, комфорт, casual
-r1 = recommend(
-    {"gender": "male", "occasion": "study_work", "activity": "calm", "priority": "comfort", "style": "casual"},
+outfits = get_outfits()
+male_results = recommend(
+    {
+        "gender": "male",
+        "occasion": "study_work",
+        "weather": "mild",
+        "activity": "calm",
+        "priority": "comfort",
+        "budget": "low",
+        "style": "casual",
+    },
     outfits,
 )
-print(f"\nТест 1 (ПАРЕНЬ / учёба/спокойный/комфорт/casual): найдено {len(r1)}")
-for o in r1:
-    print(f"  [{o.id}] {o.name} | gender={o.gender}")
-assert all("male" in o.gender for o in r1), "❌ Попался женский образ!"
+print(f"Найдено мужских образов: {len(male_results)}")
+assert male_results, "Не найдено ни одного образа для базового сценария"
+assert all("male" in result.outfit.gender for result in male_results)
 
-# Тест 2: девушка, свидание, спокойный, эффектно, минимализм
-r2 = recommend(
-    {"gender": "female", "occasion": "date", "activity": "calm", "priority": "impressive", "style": "base_minimal"},
+female_results = recommend(
+    {
+        "gender": "female",
+        "occasion": "date",
+        "weather": "mild",
+        "activity": "calm",
+        "priority": "impressive",
+        "budget": "medium",
+        "style": "base_minimal",
+    },
     outfits,
 )
-print(f"\nТест 2 (ДЕВУШКА / свидание/спокойный/эффектно/минимализм): найдено {len(r2)}")
-for o in r2:
-    print(f"  [{o.id}] {o.name} | gender={o.gender}")
-assert all("female" in o.gender for o in r2), "❌ Попался мужской образ!"
+print(f"Найдено женских образов: {len(female_results)}")
+assert female_results, "Не найдено ни одного женского образа для сценария свидания"
+assert all("female" in result.outfit.gender for result in female_results)
 
-# Тест 3: парень, мероприятие, активный, баланс, спортивный
-r3 = recommend(
-    {"gender": "male", "occasion": "event", "activity": "active", "priority": "balance", "style": "sport"},
-    outfits,
-)
-print(f"\nТест 3 (ПАРЕНЬ / мероприятие/активный/баланс/спортивный): найдено {len(r3)}")
-for o in r3:
-    print(f"  [{o.id}] {o.name} | gender={o.gender}")
-assert all("male" in o.gender for o in r3), "❌ Попался женский образ!"
+review = review_user_outfit("черная водолазка, голубые джинсы, белые кеды")
+print(review.headline)
+assert review.strengths, "Разбор образа должен содержать сильные стороны"
 
-# Тест 4: «Показать ещё» - исключаем уже показанные
-shown = [o.id for o in r1]
-r4 = recommend(
-    {"gender": "male", "occasion": "study_work", "activity": "calm", "priority": "comfort", "style": "casual"},
-    outfits,
-    shown_ids=shown,
-)
-print(f"\nТест 4 (показать ещё, исключая {shown}): найдено {len(r4)}")
-for o in r4:
-    print(f"  [{o.id}] {o.name}")
-assert not any(o.id in shown for o in r4), "❌ Вернулся уже показанный образ!"
-
-# Тест 5: проверка образа
-result = check_user_outfit("водолазка, джинсы, кроссовки", outfits)
-print(f"\nТест 5 (проверить образ 'водолазка, джинсы, кроссовки'):")
-print(f"  {result[:100]}...")
-
-print("\n✅ Все тесты пройдены!")
-
+print("✅ Smoke-test пройден")

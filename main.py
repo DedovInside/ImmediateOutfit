@@ -1,101 +1,86 @@
 """
-OutfitNow — FastAPI веб-панель статистики.
+FastAPI-панель статистики и артефактов по продукту.
 Запуск: uvicorn main:app --reload
-Работает параллельно с ботом (bot.py).
 """
-import json
 from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
 
-from models.outfit import Outfit
 from services import storage
+from services.catalog import get_outfits
 
-app = FastAPI(title="OutfitNow Stats", version="1.0")
-
-# Загружаем базу образов
-DATA_PATH = Path(__file__).resolve().parent / "data" / "outfits.json"
-with open(DATA_PATH, encoding="utf-8") as f:
-    OUTFITS: list[Outfit] = [Outfit(**o) for o in json.load(f)]
+app = FastAPI(title="ImmediateOutfit Stats", version="2.0")
+DOCS_DIR = Path(__file__).resolve().parent / "docs"
 
 
-# /health
+def _percent(value: float) -> str:
+    return f"{round(value * 100, 1)}%"
+
+
+@app.on_event("startup")
+async def startup() -> None:
+    storage.init_db()
+
+
 @app.get("/health", tags=["System"])
 async def health():
-    """Проверка работоспособности сервиса."""
-    return {"status": "ok", "bot": "OutfitNow"}
+    return {"status": "ok", "product": "ImmediateOutfit"}
 
 
-# /outfits
 @app.get("/outfits", tags=["Data"])
-async def get_outfits(gender: str | None = None):
-    """
-    Список всех образов из базы.
-    Параметр ?gender=male или ?gender=female для фильтрации.
-    """
-    result = OUTFITS
+async def get_outfits_route(gender: str | None = None):
+    outfits = get_outfits()
     if gender:
-        result = [o for o in OUTFITS if gender in o.gender]
+        outfits = [outfit for outfit in outfits if gender in outfit.gender]
     return {
-        "total": len(result),
-        "outfits": [o.model_dump() for o in result],
+        "total": len(outfits),
+        "outfits": [outfit.model_dump() for outfit in outfits],
     }
 
 
-# /stats
 @app.get("/stats", tags=["Analytics"])
 async def get_stats():
-    """Статистика использования бота."""
-    saved_data = storage._saved  # noqa: SLF001
-
-    total_users = len(saved_data)
-    total_saved = sum(len(v) for v in saved_data.values())
-
-    males = [o for o in OUTFITS if "male" in o.gender]
-    females = [o for o in OUTFITS if "female" in o.gender]
-
-    # Топ сохранённых образов
-    outfit_counter: dict[str, int] = {}
-    for outfits in saved_data.values():
-        for outfit in outfits:
-            outfit_counter[outfit.name] = outfit_counter.get(outfit.name, 0) + 1
-    top_outfits = sorted(outfit_counter.items(), key=lambda x: x[1], reverse=True)[:5]
-
-    return {
-        "users": {
-            "total_unique": total_users,
-        },
-        "saves": {
-            "total_saved_outfits": total_saved,
-            "avg_saves_per_user": round(total_saved / total_users, 2) if total_users else 0,
-        },
-        "top_saved_outfits": [{"name": n, "saves": c} for n, c in top_outfits],
-        "database": {
-            "total_outfits": len(OUTFITS),
-            "male_outfits": len(males),
-            "female_outfits": len(females),
-        },
-    }
+    return storage.get_metrics()
 
 
-# / - простая HTML-страница
+@app.get("/artifacts/{name}", response_class=HTMLResponse, tags=["Artifacts"])
+async def artifact_page(name: str):
+    path = DOCS_DIR / f"{name}.md"
+    if not path.exists():
+        return HTMLResponse("<h1>Artifact not found</h1>", status_code=404)
+    content = path.read_text(encoding="utf-8").replace("\n", "<br>")
+    return HTMLResponse(f"<html><body style='font-family: Arial, sans-serif; max-width: 900px; margin: 40px auto;'>{content}</body></html>")
+
+
 @app.get("/", response_class=HTMLResponse, tags=["System"])
 async def dashboard():
-    """Простая веб-страница с метриками."""
-    saved_data = storage._saved  # noqa: SLF001
-    total_users = len(saved_data)
-    total_saved = sum(len(v) for v in saved_data.values())
+    metrics = storage.get_metrics()
+    funnel = metrics["funnel"]
+    engagement = metrics["engagement"]
+    quality = metrics["quality"]
+    users = metrics["users"]
+    cards = {
+        "Пользователи": users["total_unique"],
+        "Стартов анкеты": funnel["quiz_started"],
+        "Completion rate": _percent(funnel["quiz_completion_rate"]),
+        "Save rate": _percent(engagement["save_rate"]),
+        "Repeat usage": _percent(engagement["repeat_usage_rate"]),
+        "Premium interest": _percent(quality["premium_interest_rate"]),
+    }
+    dropoff_rows = "".join(
+        f"<tr><td>{step}</td><td>{count}</td></tr>"
+        for step, count in funnel["dropoff_by_step"].items()
+    ) or "<tr><td colspan='2'>Пока нет данных</td></tr>"
+    event_rows = "".join(
+        f"<tr><td>{name}</td><td>{count}</td></tr>"
+        for name, count in sorted(metrics["events"].items(), key=lambda item: item[1], reverse=True)[:12]
+    ) or "<tr><td colspan='2'>Пока нет данных</td></tr>"
 
-    outfit_counter: dict[str, int] = {}
-    for outfits in saved_data.values():
-        for outfit in outfits:
-            outfit_counter[outfit.name] = outfit_counter.get(outfit.name, 0) + 1
-    top_outfits = sorted(outfit_counter.items(), key=lambda x: x[1], reverse=True)[:5]
-    top_rows = "".join(
-        f"<tr><td>{i+1}</td><td>{name}</td><td>{count}</td></tr>"
-        for i, (name, count) in enumerate(top_outfits)
-    ) or "<tr><td colspan='3'>Пока нет данных</td></tr>"
+    cards_html = "".join(
+        f"<div class='card'><div class='num'>{value}</div><div class='label'>{label}</div></div>"
+        for label, value in cards.items()
+    )
 
     html = f"""
     <!DOCTYPE html>
@@ -103,40 +88,120 @@ async def dashboard():
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>OutfitNow — Dashboard</title>
+        <title>ImmediateOutfit Dashboard</title>
         <style>
-            body {{ font-family: Arial, sans-serif; max-width: 800px; margin: 40px auto; padding: 0 20px; background: #f5f5f5; }}
-            h1 {{ color: #333; }} h2 {{ color: #555; margin-top: 30px; }}
-            .cards {{ display: flex; gap: 20px; flex-wrap: wrap; margin: 20px 0; }}
-            .card {{ background: white; border-radius: 12px; padding: 20px 30px; flex: 1; min-width: 150px;
-                     box-shadow: 0 2px 8px rgba(0,0,0,0.1); text-align: center; }}
-            .card .num {{ font-size: 2.5em; font-weight: bold; color: #6c63ff; }}
-            .card .label {{ color: #888; font-size: 0.9em; margin-top: 5px; }}
-            table {{ width: 100%; border-collapse: collapse; background: white;
-                     border-radius: 12px; overflow: hidden; box-shadow: 0 2px 8px rgba(0,0,0,0.1); }}
-            th {{ background: #6c63ff; color: white; padding: 12px; text-align: left; }}
-            td {{ padding: 10px 12px; border-bottom: 1px solid #eee; }}
-            .links {{ margin-top: 30px; }}
-            .links a {{ margin-right: 15px; color: #6c63ff; text-decoration: none; font-weight: bold; }}
+            :root {{
+                --bg: #f4efe8;
+                --card: #fffaf3;
+                --accent: #ae5f3d;
+                --accent-dark: #6f3d28;
+                --text: #2b2521;
+                --muted: #76685f;
+                --border: #eadfd4;
+            }}
+            body {{
+                font-family: Georgia, serif;
+                max-width: 1080px;
+                margin: 36px auto;
+                padding: 0 18px 48px;
+                background: radial-gradient(circle at top right, #efe2d4, var(--bg));
+                color: var(--text);
+            }}
+            h1, h2 {{ color: var(--accent-dark); }}
+            .cards {{
+                display: grid;
+                grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+                gap: 16px;
+                margin: 24px 0;
+            }}
+            .card {{
+                background: var(--card);
+                border: 1px solid var(--border);
+                border-radius: 18px;
+                padding: 18px;
+                box-shadow: 0 10px 30px rgba(111, 61, 40, 0.08);
+            }}
+            .num {{ font-size: 2.1rem; font-weight: bold; color: var(--accent); }}
+            .label {{ color: var(--muted); margin-top: 8px; }}
+            .grid {{
+                display: grid;
+                grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+                gap: 18px;
+            }}
+            table {{
+                width: 100%;
+                border-collapse: collapse;
+                background: var(--card);
+                border-radius: 16px;
+                overflow: hidden;
+            }}
+            th {{
+                background: var(--accent);
+                color: white;
+                text-align: left;
+                padding: 12px;
+            }}
+            td {{
+                border-bottom: 1px solid var(--border);
+                padding: 10px 12px;
+            }}
+            .note {{
+                background: rgba(255,255,255,0.6);
+                border-left: 4px solid var(--accent);
+                padding: 12px 14px;
+                border-radius: 12px;
+                margin-top: 12px;
+            }}
+            .links a {{
+                color: var(--accent-dark);
+                text-decoration: none;
+                margin-right: 14px;
+                font-weight: bold;
+            }}
         </style>
     </head>
     <body>
-        <h1>👗 OutfitNow — Dashboard</h1>
-        <div class="cards">
-            <div class="card"><div class="num">{total_users}</div><div class="label">Уникальных пользователей</div></div>
-            <div class="card"><div class="num">{total_saved}</div><div class="label">Образов сохранено</div></div>
-            <div class="card"><div class="num">{len(OUTFITS)}</div><div class="label">Образов в базе</div></div>
+        <h1>ImmediateOutfit Product Dashboard</h1>
+        <p>Панель для продуктовых спринтов: воронка, engagement, quality и артефакты для защиты курса.</p>
+
+        <div class="cards">{cards_html}</div>
+
+        <div class="grid">
+            <div>
+                <h2>Воронка по шагам</h2>
+                <table>
+                    <tr><th>Шаг</th><th>Ответов</th></tr>
+                    {dropoff_rows}
+                </table>
+                <div class="note">
+                    Result view rate: <b>{_percent(funnel["result_view_rate"])}</b><br>
+                    Profile completion: <b>{_percent(engagement["profile_completion_rate"])}</b><br>
+                    Weather usage: <b>{_percent(engagement["weather_usage_rate"])}</b>
+                </div>
+            </div>
+            <div>
+                <h2>Ключевые события</h2>
+                <table>
+                    <tr><th>Событие</th><th>Количество</th></tr>
+                    {event_rows}
+                </table>
+                <div class="note">
+                    Satisfaction rate: <b>{quality["satisfaction_rate"]}</b><br>
+                    Review satisfaction: <b>{quality["review_satisfaction_rate"]}</b><br>
+                    Outfit check usage: <b>{_percent(engagement["outfit_check_usage_rate"])}</b>
+                </div>
+            </div>
         </div>
-        <h2>🏆 Топ сохранённых образов</h2>
-        <table>
-            <tr><th>#</th><th>Образ</th><th>Сохранений</th></tr>
-            {top_rows}
-        </table>
+
+        <h2>Артефакты курса</h2>
         <div class="links">
-            <a href="/docs">📄 API Docs</a>
-            <a href="/stats">📊 JSON Stats</a>
-            <a href="/outfits">👕 All Outfits</a>
-            <a href="/health">✅ Health</a>
+            <a href="/stats">JSON Stats</a>
+            <a href="/artifacts/metrics">Metrics</a>
+            <a href="/artifacts/sprint_map">Sprint Map</a>
+            <a href="/artifacts/roadmap">Roadmap</a>
+            <a href="/artifacts/unit_economics">Unit Economics</a>
+            <a href="/outfits">Outfits Catalog</a>
+            <a href="/docs">API Docs</a>
         </div>
     </body>
     </html>

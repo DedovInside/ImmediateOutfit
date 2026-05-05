@@ -1,40 +1,32 @@
 """
-Фабрики InlineKeyboardMarkup для каждого шага диалога.
+Фабрики InlineKeyboardMarkup для основных сценариев бота.
 """
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 
-# -----------------
-# Стартовая кнопка
-# -----------------
-def start_keyboard() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text="👗 Подобрать образ", callback_data="start_quiz")],
+def start_keyboard(has_profile: bool = False) -> InlineKeyboardMarkup:
+    rows = [
+        [InlineKeyboardButton(text="👗 Подобрать образ", callback_data="start_quiz")],
+    ]
+    if has_profile:
+        rows.append([InlineKeyboardButton(text="⚡ Быстрый подбор", callback_data="quick_start")])
+    rows.extend(
+        [
+            [InlineKeyboardButton(text="👚 Подобрать под мою вещь", callback_data="item_flow_start")],
+            [InlineKeyboardButton(text="🔍 Проверить мой образ", callback_data="check_outfit")],
+            [InlineKeyboardButton(text="🧬 Мой профиль", callback_data="profile_view")],
+            [InlineKeyboardButton(text="✨ Premium", callback_data="premium_info")],
         ]
     )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-# -----------------------
-# Вопрос 0 - Пол
-# -----------------------
 GENDER_OPTIONS = [
     ("👦 Парень", "male"),
     ("👧 Девушка", "female"),
 ]
 
-def gender_keyboard() -> InlineKeyboardMarkup:
-    builder = InlineKeyboardBuilder()
-    for text, data in GENDER_OPTIONS:
-        builder.button(text=text, callback_data=f"gender:{data}")
-    builder.adjust(2)
-    return builder.as_markup()
-
-
-# -----------------------
-# Вопрос 1 - Куда идёшь?
-# -----------------------
 OCCASION_OPTIONS = [
     ("📚 Учёба / работа", "study_work"),
     ("🏠 Обычный день", "casual_day"),
@@ -43,51 +35,31 @@ OCCASION_OPTIONS = [
     ("🎉 Мероприятие", "event"),
 ]
 
-def occasion_keyboard() -> InlineKeyboardMarkup:
-    builder = InlineKeyboardBuilder()
-    for text, data in OCCASION_OPTIONS:
-        builder.button(text=text, callback_data=f"occasion:{data}")
-    builder.adjust(2)  # по 2 кнопки в ряд
-    return builder.as_markup()
+WEATHER_OPTIONS = [
+    ("☀️ Тепло", "warm"),
+    ("🌤 Переменчиво", "mild"),
+    ("🧥 Холодно", "cold"),
+    ("🌧 Дождь", "rain"),
+]
 
-
-# ---------------------------------------
-# Вопрос 2 - Насколько насыщенный день?
-# ---------------------------------------
 ACTIVITY_OPTIONS = [
     ("😌 Спокойный, одно место", "calm"),
     ("🚶 Буду много двигаться", "active"),
     ("🔄 Несколько разных дел", "mixed"),
 ]
 
-def activity_keyboard() -> InlineKeyboardMarkup:
-    builder = InlineKeyboardBuilder()
-    for text, data in ACTIVITY_OPTIONS:
-        builder.button(text=text, callback_data=f"activity:{data}")
-    builder.adjust(1)
-    return builder.as_markup()
-
-
-# ----------------------------------------
-# Вопрос 3 - Что важнее сегодня?
-# ----------------------------------------
 PRIORITY_OPTIONS = [
     ("🧸 Комфорт", "comfort"),
     ("⚖️ Баланс", "balance"),
     ("✨ Хочу выглядеть эффектно", "impressive"),
 ]
 
-def priority_keyboard() -> InlineKeyboardMarkup:
-    builder = InlineKeyboardBuilder()
-    for text, data in PRIORITY_OPTIONS:
-        builder.button(text=text, callback_data=f"priority:{data}")
-    builder.adjust(1)
-    return builder.as_markup()
+BUDGET_OPTIONS = [
+    ("💸 Экономно", "low"),
+    ("💳 Средний", "medium"),
+    ("💎 Можно вложиться", "high"),
+]
 
-
-# -------------------
-# Вопрос 4 - Стиль
-# -------------------
 STYLE_OPTIONS = [
     ("🤍 База / минимализм", "base_minimal"),
     ("👕 Casual", "casual"),
@@ -95,24 +67,81 @@ STYLE_OPTIONS = [
     ("👔 Более классический", "classic"),
 ]
 
-def style_keyboard() -> InlineKeyboardMarkup:
+
+def _choice_keyboard(options: list[tuple[str, str]], prefix: str, width: int = 2) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
-    for text, data in STYLE_OPTIONS:
-        builder.button(text=text, callback_data=f"style:{data}")
-    builder.adjust(2)
+    for text, data in options:
+        builder.button(text=text, callback_data=f"{prefix}:{data}")
+    builder.adjust(width)
     return builder.as_markup()
 
 
-# ---------------------------
-# Кнопки после показа образа
-# ---------------------------
+def gender_keyboard() -> InlineKeyboardMarkup:
+    return _choice_keyboard(GENDER_OPTIONS, "gender", width=2)
+
+
+def occasion_keyboard() -> InlineKeyboardMarkup:
+    return _choice_keyboard(OCCASION_OPTIONS, "occasion", width=2)
+
+
+def weather_keyboard() -> InlineKeyboardMarkup:
+    return _choice_keyboard(WEATHER_OPTIONS, "weather", width=2)
+
+
+def activity_keyboard() -> InlineKeyboardMarkup:
+    return _choice_keyboard(ACTIVITY_OPTIONS, "activity", width=1)
+
+
+def priority_keyboard() -> InlineKeyboardMarkup:
+    return _choice_keyboard(PRIORITY_OPTIONS, "priority", width=1)
+
+
+def budget_keyboard() -> InlineKeyboardMarkup:
+    return _choice_keyboard(BUDGET_OPTIONS, "budget", width=1)
+
+
+def style_keyboard() -> InlineKeyboardMarkup:
+    return _choice_keyboard(STYLE_OPTIONS, "style", width=2)
+
+
 def outfit_result_keyboard(outfit_id: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
-                InlineKeyboardButton(text="👍 Подходит", callback_data=f"save:{outfit_id}"),
+                InlineKeyboardButton(text="👍 Сохранить", callback_data=f"save:{outfit_id}"),
+                InlineKeyboardButton(text="🧠 Почему подходит", callback_data=f"explain:{outfit_id}"),
+            ],
+            [
+                InlineKeyboardButton(text="🖼 Референс", callback_data=f"reference:{outfit_id}"),
+                InlineKeyboardButton(text="🛍 Артикулы", callback_data=f"links:{outfit_id}"),
+            ],
+            [
                 InlineKeyboardButton(text="🔄 Показать ещё", callback_data="show_more"),
             ],
+        ]
+    )
+
+
+def result_feedback_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="👍 Полезно", callback_data="result_feedback:5"),
+                InlineKeyboardButton(text="🤔 Норм", callback_data="result_feedback:3"),
+                InlineKeyboardButton(text="👎 Мимо", callback_data="result_feedback:1"),
+            ]
+        ]
+    )
+
+
+def review_feedback_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="👍 Да, помогло", callback_data="review_feedback:5"),
+                InlineKeyboardButton(text="👌 Частично", callback_data="review_feedback:3"),
+                InlineKeyboardButton(text="👎 Нет", callback_data="review_feedback:1"),
+            ]
         ]
     )
 
@@ -120,15 +149,30 @@ def outfit_result_keyboard(outfit_id: str) -> InlineKeyboardMarkup:
 def final_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [
-                InlineKeyboardButton(text="🔍 Проверить мой образ", callback_data="check_outfit"),
-            ],
-            [
-                InlineKeyboardButton(text="🔁 Подобрать заново", callback_data="start_quiz"),
-            ],
-            [
-                InlineKeyboardButton(text="📂 Мои сохранённые", callback_data="show_saved"),
-            ],
+            [InlineKeyboardButton(text="🔁 Подобрать заново", callback_data="start_quiz")],
+            [InlineKeyboardButton(text="⚡ Быстрый подбор", callback_data="quick_start")],
+            [InlineKeyboardButton(text="👚 Под мою вещь", callback_data="item_flow_start")],
+            [InlineKeyboardButton(text="📂 Мои сохранённые", callback_data="show_saved")],
+            [InlineKeyboardButton(text="🧬 Мой профиль", callback_data="profile_view")],
+            [InlineKeyboardButton(text="✨ Premium", callback_data="premium_info")],
         ]
     )
 
+
+def profile_keyboard(has_profile: bool = False) -> InlineKeyboardMarkup:
+    rows = [[InlineKeyboardButton(text="🎨 Любимые цвета", callback_data="profile_colors")]]
+    rows.append([InlineKeyboardButton(text="🚫 Не люблю носить", callback_data="profile_disliked")])
+    rows.append([InlineKeyboardButton(text="👕 Мои ключевые вещи", callback_data="profile_key_items")])
+    if has_profile:
+        rows.append([InlineKeyboardButton(text="⚡ Быстрый подбор", callback_data="quick_start")])
+    rows.append([InlineKeyboardButton(text="⬅️ В главное меню", callback_data="menu_home")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def premium_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="🙋 Хочу early access", callback_data="premium_interest")],
+            [InlineKeyboardButton(text="⬅️ В меню", callback_data="menu_home")],
+        ]
+    )
