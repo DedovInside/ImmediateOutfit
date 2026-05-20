@@ -5,6 +5,7 @@ from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
+from config import settings
 from keyboards.inline import (
     activity_keyboard,
     budget_keyboard,
@@ -16,17 +17,47 @@ from keyboards.inline import (
 )
 from models.states import OutfitForm
 from services import storage
+from services.weather import fetch_weather
 
 router = Router()
 
+STEP_VIEW = {
+    "gender": ("👤 <b>Для кого подбираем образ?</b>", gender_keyboard),
+    "occasion": ("📍 <b>Куда ты сегодня идёшь?</b>", occasion_keyboard),
+    "weather": ("🌦 <b>Какая погода или ощущение по погоде сегодня?</b>", weather_keyboard),
+    "activity": ("🗓 <b>Насколько насыщенный у тебя день?</b>", activity_keyboard),
+    "priority": ("🎯 <b>Что для тебя важнее сегодня?</b>", priority_keyboard),
+    "budget": ("💰 <b>Какой ориентир по бюджету сегодня?</b>", budget_keyboard),
+    "style": ("🎨 <b>Твой стиль ближе к:</b>", style_keyboard),
+}
+STATE_BY_STEP = {
+    "gender": OutfitForm.gender,
+    "occasion": OutfitForm.occasion,
+    "weather": OutfitForm.weather,
+    "activity": OutfitForm.activity,
+    "priority": OutfitForm.priority,
+    "budget": OutfitForm.budget,
+    "style": OutfitForm.style,
+}
 
-async def _goto_occasion(callback: CallbackQuery, state: FSMContext) -> None:
-    await state.set_state(OutfitForm.occasion)
+
+async def _show_step(callback: CallbackQuery, state: FSMContext, step: str, advance_from: str | None) -> None:
+    data = await state.get_data()
+    history = list(data.get("history", []))
+    if advance_from:
+        history.append(advance_from)
+    await state.update_data(history=history)
+    await state.set_state(STATE_BY_STEP[step])
+    text, kb_fn = STEP_VIEW[step]
     await callback.message.edit_text(  # type: ignore[union-attr]
-        "📍 <b>Куда ты сегодня идёшь?</b>",
-        reply_markup=occasion_keyboard(),
+        text,
+        reply_markup=kb_fn(back=bool(history)),
         parse_mode="HTML",
     )
+
+
+async def _goto_occasion(callback: CallbackQuery, state: FSMContext) -> None:
+    await _show_step(callback, state, "occasion", advance_from=None)
 
 
 async def _finalize_quiz(callback: CallbackQuery, state: FSMContext) -> None:
@@ -47,19 +78,14 @@ async def _finalize_quiz(callback: CallbackQuery, state: FSMContext) -> None:
 @router.callback_query(F.data == "start_quiz")
 async def start_quiz(callback: CallbackQuery, state: FSMContext) -> None:
     await state.clear()
-    await state.update_data(flow_mode="standard", shown_ids=[])
+    await state.update_data(flow_mode="standard", shown_ids=[], history=[])
     storage.record_event(callback.from_user.id, "quiz_started", {"mode": "standard"})
     profile = storage.get_profile(callback.from_user.id)
     if profile and profile.gender:
         await state.update_data(gender=profile.gender, budget=profile.budget, style=profile.style)
         await _goto_occasion(callback, state)
     else:
-        await state.set_state(OutfitForm.gender)
-        await callback.message.edit_text(  # type: ignore[union-attr]
-            "👤 <b>Для кого подбираем образ?</b>",
-            reply_markup=gender_keyboard(),
-            parse_mode="HTML",
-        )
+        await _show_step(callback, state, "gender", advance_from=None)
     await callback.answer()
 
 
@@ -67,7 +93,7 @@ async def start_quiz(callback: CallbackQuery, state: FSMContext) -> None:
 async def quick_start(callback: CallbackQuery, state: FSMContext) -> None:
     await state.clear()
     profile = storage.get_profile(callback.from_user.id)
-    await state.update_data(flow_mode="quick", shown_ids=[])
+    await state.update_data(flow_mode="quick", shown_ids=[], history=[])
     storage.record_event(callback.from_user.id, "quiz_started", {"mode": "quick"})
     if profile:
         await state.update_data(
@@ -79,19 +105,14 @@ async def quick_start(callback: CallbackQuery, state: FSMContext) -> None:
     if data.get("gender"):
         await _goto_occasion(callback, state)
     else:
-        await state.set_state(OutfitForm.gender)
-        await callback.message.edit_text(  # type: ignore[union-attr]
-            "👤 <b>Для кого подбираем образ?</b>",
-            reply_markup=gender_keyboard(),
-            parse_mode="HTML",
-        )
+        await _show_step(callback, state, "gender", advance_from=None)
     await callback.answer()
 
 
 @router.callback_query(F.data == "item_flow_start")
 async def item_flow_start(callback: CallbackQuery, state: FSMContext) -> None:
     await state.clear()
-    await state.update_data(flow_mode="item", shown_ids=[])
+    await state.update_data(flow_mode="item", shown_ids=[], history=[])
     storage.record_event(callback.from_user.id, "item_flow_started")
     await state.set_state(OutfitForm.item_anchor)
     await callback.message.answer(  # type: ignore[union-attr]
@@ -129,7 +150,7 @@ async def process_gender(callback: CallbackQuery, state: FSMContext) -> None:
     await state.update_data(gender=value)
     storage.upsert_profile(callback.from_user.id, gender=value)
     storage.record_event(callback.from_user.id, "question_answered", {"step": "gender", "value": value})
-    await _goto_occasion(callback, state)
+    await _show_step(callback, state, "occasion", advance_from="gender")
     await callback.answer()
 
 
@@ -138,12 +159,7 @@ async def process_occasion(callback: CallbackQuery, state: FSMContext) -> None:
     value = callback.data.split(":")[1]  # type: ignore[union-attr]
     await state.update_data(occasion=value)
     storage.record_event(callback.from_user.id, "question_answered", {"step": "occasion", "value": value})
-    await state.set_state(OutfitForm.weather)
-    await callback.message.edit_text(  # type: ignore[union-attr]
-        "🌦 <b>Какая погода или ощущение по погоде сегодня?</b>",
-        reply_markup=weather_keyboard(),
-        parse_mode="HTML",
-    )
+    await _show_step(callback, state, "weather", advance_from="occasion")
     await callback.answer()
 
 
@@ -152,14 +168,85 @@ async def process_weather(callback: CallbackQuery, state: FSMContext) -> None:
     value = callback.data.split(":")[1]  # type: ignore[union-attr]
     await state.update_data(weather=value)
     storage.record_event(callback.from_user.id, "question_answered", {"step": "weather", "value": value})
+    # Два события намеренно: question_answered кормит dropoff_by_step,
+    # отдельный weather_selected — метрику weather_usage_rate в storage.get_metrics().
     storage.record_event(callback.from_user.id, "weather_selected", {"value": value})
-    await state.set_state(OutfitForm.activity)
-    await callback.message.edit_text(  # type: ignore[union-attr]
-        "🗓 <b>Насколько насыщенный у тебя день?</b>",
-        reply_markup=activity_keyboard(),
+    await _show_step(callback, state, "activity", advance_from="weather")
+    await callback.answer()
+
+
+@router.callback_query(OutfitForm.weather, F.data == "weather_auto")
+async def process_weather_auto(callback: CallbackQuery, state: FSMContext) -> None:
+    storage.record_event(callback.from_user.id, "weather_auto_attempted")
+    if not settings.OWM_API_KEY:
+        await callback.answer(
+            "Авто-погода пока не подключена, выбери вручную 🙂",
+            show_alert=True,
+        )
+        return
+    await state.set_state(OutfitForm.weather_city)
+    await callback.message.answer(  # type: ignore[union-attr]
+        "📍 <b>Напиши город или индекс</b> (например: Москва, Санкт-Петербург, 123056).\n\n"
+        "Если передумал — /skip и вернёмся к ручному выбору.",
         parse_mode="HTML",
     )
     await callback.answer()
+
+
+@router.message(OutfitForm.weather_city, F.text == "/skip")
+async def cancel_weather_auto(message: Message, state: FSMContext) -> None:
+    await state.set_state(OutfitForm.weather)
+    await message.answer(
+        "Окей, выбери погоду вручную:",
+        reply_markup=weather_keyboard(back=False),
+        parse_mode="HTML",
+    )
+
+
+@router.message(OutfitForm.weather_city)
+async def process_weather_city(message: Message, state: FSMContext) -> None:
+    city = (message.text or "").strip()[:60]
+    if not city:
+        await message.answer("Кажется, ничего не пришло. Напиши город или /skip для ручного выбора.")
+        return
+
+    snapshot = await fetch_weather(city, settings.OWM_API_KEY)
+    if snapshot is None:
+        storage.record_event(message.from_user.id, "weather_auto_failed", {"city": city})
+        await state.set_state(OutfitForm.weather)
+        await message.answer(
+            "Не удалось получить погоду по этому городу 😔 Выбери вручную:",
+            reply_markup=weather_keyboard(back=False),
+            parse_mode="HTML",
+        )
+        return
+
+    await state.update_data(weather=snapshot.bucket)
+    storage.record_event(
+        message.from_user.id,
+        "weather_auto_succeeded",
+        {"city": snapshot.city, "bucket": snapshot.bucket, "temp": snapshot.temp},
+    )
+    storage.record_event(message.from_user.id, "weather_selected", {"value": snapshot.bucket, "source": "auto"})
+    storage.record_event(message.from_user.id, "question_answered", {"step": "weather", "value": snapshot.bucket})
+
+    bucket_titles = {"warm": "тёплая", "mild": "переменчивая", "cold": "холодная", "rain": "дождливая"}
+    bucket_label = bucket_titles.get(snapshot.bucket, snapshot.bucket)
+    await message.answer(
+        f"📍 <b>{snapshot.city}</b>: {snapshot.temp:+.0f}°, {snapshot.condition} → собираю на «{bucket_label}» погоду.",
+        parse_mode="HTML",
+    )
+
+    data = await state.get_data()
+    history = list(data.get("history", []))
+    history.append("weather")
+    await state.update_data(history=history)
+    await state.set_state(OutfitForm.activity)
+    await message.answer(
+        "🗓 <b>Насколько насыщенный у тебя день?</b>",
+        reply_markup=activity_keyboard(back=True),
+        parse_mode="HTML",
+    )
 
 
 @router.callback_query(OutfitForm.activity, F.data.startswith("activity:"))
@@ -167,12 +254,7 @@ async def process_activity(callback: CallbackQuery, state: FSMContext) -> None:
     value = callback.data.split(":")[1]  # type: ignore[union-attr]
     await state.update_data(activity=value)
     storage.record_event(callback.from_user.id, "question_answered", {"step": "activity", "value": value})
-    await state.set_state(OutfitForm.priority)
-    await callback.message.edit_text(  # type: ignore[union-attr]
-        "🎯 <b>Что для тебя важнее сегодня?</b>",
-        reply_markup=priority_keyboard(),
-        parse_mode="HTML",
-    )
+    await _show_step(callback, state, "priority", advance_from="activity")
     await callback.answer()
 
 
@@ -185,12 +267,7 @@ async def process_priority(callback: CallbackQuery, state: FSMContext) -> None:
     if data.get("flow_mode") == "quick" and data.get("budget") and data.get("style"):
         await _finalize_quiz(callback, state)
         return
-    await state.set_state(OutfitForm.budget)
-    await callback.message.edit_text(  # type: ignore[union-attr]
-        "💰 <b>Какой ориентир по бюджету сегодня?</b>",
-        reply_markup=budget_keyboard(),
-        parse_mode="HTML",
-    )
+    await _show_step(callback, state, "budget", advance_from="priority")
     await callback.answer()
 
 
@@ -204,10 +281,24 @@ async def process_budget(callback: CallbackQuery, state: FSMContext) -> None:
     if data.get("flow_mode") == "quick" and data.get("style"):
         await _finalize_quiz(callback, state)
         return
-    await state.set_state(OutfitForm.style)
+    await _show_step(callback, state, "style", advance_from="budget")
+    await callback.answer()
+
+
+@router.callback_query(F.data == "back")
+async def on_back(callback: CallbackQuery, state: FSMContext) -> None:
+    data = await state.get_data()
+    history = list(data.get("history", []))
+    if not history:
+        await callback.answer("Это первый шаг, дальше некуда")
+        return
+    prev_step = history.pop()
+    await state.update_data(history=history)
+    await state.set_state(STATE_BY_STEP[prev_step])
+    text, kb_fn = STEP_VIEW[prev_step]
     await callback.message.edit_text(  # type: ignore[union-attr]
-        "🎨 <b>Твой стиль ближе к:</b>",
-        reply_markup=style_keyboard(),
+        text,
+        reply_markup=kb_fn(back=bool(history)),
         parse_mode="HTML",
     )
     await callback.answer()

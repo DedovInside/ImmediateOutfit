@@ -3,6 +3,8 @@
 """
 from __future__ import annotations
 
+from html import escape
+
 from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
@@ -12,6 +14,27 @@ from models.states import OutfitForm
 from services import storage
 
 router = Router()
+
+GENDER_LABELS = {"male": "парень", "female": "девушка"}
+STYLE_LABELS = {
+    "base_minimal": "база / минимализм",
+    "casual": "casual",
+    "sport": "спорт",
+    "classic": "классика",
+}
+BUDGET_LABELS = {"low": "экономно", "medium": "средний", "high": "можно вложиться"}
+
+
+def _label(value: str | None, mapping: dict[str, str]) -> str:
+    if not value:
+        return "не указан"
+    return escape(mapping.get(value, value))
+
+
+def _join_user_list(items: list[str], empty_text: str) -> str:
+    if not items:
+        return empty_text
+    return ", ".join(escape(item) for item in items)
 
 
 def _format_profile(user_id: int) -> str:
@@ -24,12 +47,12 @@ def _format_profile(user_id: int) -> str:
 
     return (
         "🧬 <b>Твой профиль ImmediateOutfit</b>\n\n"
-        f"Пол: <b>{profile.gender or 'не указан'}</b>\n"
-        f"Стиль: <b>{profile.style or 'не указан'}</b>\n"
-        f"Бюджет: <b>{profile.budget or 'не указан'}</b>\n"
-        f"Любимые цвета: <b>{', '.join(profile.preferred_colors) or 'не заданы'}</b>\n"
-        f"Анти-предпочтения: <b>{', '.join(profile.disliked_items) or 'не заданы'}</b>\n"
-        f"Ключевые вещи: <b>{', '.join(profile.key_items) or 'не заданы'}</b>"
+        f"Пол: <b>{_label(profile.gender, GENDER_LABELS)}</b>\n"
+        f"Стиль: <b>{_label(profile.style, STYLE_LABELS)}</b>\n"
+        f"Бюджет: <b>{_label(profile.budget, BUDGET_LABELS)}</b>\n"
+        f"Любимые цвета: <b>{_join_user_list(profile.preferred_colors, 'не заданы')}</b>\n"
+        f"Анти-предпочтения: <b>{_join_user_list(profile.disliked_items, 'не заданы')}</b>\n"
+        f"Ключевые вещи: <b>{_join_user_list(profile.key_items, 'не заданы')}</b>"
     )
 
 

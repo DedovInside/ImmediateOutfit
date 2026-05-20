@@ -68,53 +68,65 @@ STYLE_OPTIONS = [
 ]
 
 
-def _choice_keyboard(options: list[tuple[str, str]], prefix: str, width: int = 2) -> InlineKeyboardMarkup:
+def _choice_keyboard(
+    options: list[tuple[str, str]], prefix: str, width: int = 2, back: bool = False
+) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     for text, data in options:
         builder.button(text=text, callback_data=f"{prefix}:{data}")
     builder.adjust(width)
+    if back:
+        builder.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="back"))
     return builder.as_markup()
 
 
-def gender_keyboard() -> InlineKeyboardMarkup:
-    return _choice_keyboard(GENDER_OPTIONS, "gender", width=2)
+def gender_keyboard(back: bool = False) -> InlineKeyboardMarkup:
+    return _choice_keyboard(GENDER_OPTIONS, "gender", width=2, back=back)
 
 
-def occasion_keyboard() -> InlineKeyboardMarkup:
-    return _choice_keyboard(OCCASION_OPTIONS, "occasion", width=2)
+def occasion_keyboard(back: bool = False) -> InlineKeyboardMarkup:
+    return _choice_keyboard(OCCASION_OPTIONS, "occasion", width=2, back=back)
 
 
-def weather_keyboard() -> InlineKeyboardMarkup:
-    return _choice_keyboard(WEATHER_OPTIONS, "weather", width=2)
+def weather_keyboard(back: bool = False, show_auto: bool = True) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    for text, data in WEATHER_OPTIONS:
+        builder.button(text=text, callback_data=f"weather:{data}")
+    builder.adjust(2)
+    if show_auto:
+        builder.row(InlineKeyboardButton(text="📍 По моему городу", callback_data="weather_auto"))
+    if back:
+        builder.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="back"))
+    return builder.as_markup()
 
 
-def activity_keyboard() -> InlineKeyboardMarkup:
-    return _choice_keyboard(ACTIVITY_OPTIONS, "activity", width=1)
+def activity_keyboard(back: bool = False) -> InlineKeyboardMarkup:
+    return _choice_keyboard(ACTIVITY_OPTIONS, "activity", width=2, back=back)
 
 
-def priority_keyboard() -> InlineKeyboardMarkup:
-    return _choice_keyboard(PRIORITY_OPTIONS, "priority", width=1)
+def priority_keyboard(back: bool = False) -> InlineKeyboardMarkup:
+    return _choice_keyboard(PRIORITY_OPTIONS, "priority", width=2, back=back)
 
 
-def budget_keyboard() -> InlineKeyboardMarkup:
-    return _choice_keyboard(BUDGET_OPTIONS, "budget", width=1)
+def budget_keyboard(back: bool = False) -> InlineKeyboardMarkup:
+    return _choice_keyboard(BUDGET_OPTIONS, "budget", width=2, back=back)
 
 
-def style_keyboard() -> InlineKeyboardMarkup:
-    return _choice_keyboard(STYLE_OPTIONS, "style", width=2)
+def style_keyboard(back: bool = False) -> InlineKeyboardMarkup:
+    return _choice_keyboard(STYLE_OPTIONS, "style", width=2, back=back)
 
 
-def outfit_result_keyboard(outfit_id: str) -> InlineKeyboardMarkup:
+def outfit_result_keyboard(outfit_id: str, show_links: bool = True) -> InlineKeyboardMarkup:
+    second_row = [InlineKeyboardButton(text="🖼 Референс", callback_data=f"reference:{outfit_id}")]
+    if show_links:
+        second_row.append(InlineKeyboardButton(text="🛍 Где искать", callback_data=f"links:{outfit_id}"))
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
                 InlineKeyboardButton(text="👍 Сохранить", callback_data=f"save:{outfit_id}"),
                 InlineKeyboardButton(text="🧠 Почему подходит", callback_data=f"explain:{outfit_id}"),
             ],
-            [
-                InlineKeyboardButton(text="🖼 Референс", callback_data=f"reference:{outfit_id}"),
-                InlineKeyboardButton(text="🛍 Артикулы", callback_data=f"links:{outfit_id}"),
-            ],
+            second_row,
             [
                 InlineKeyboardButton(text="🔄 Показать ещё", callback_data="show_more"),
             ],
@@ -142,6 +154,14 @@ def review_feedback_keyboard() -> InlineKeyboardMarkup:
                 InlineKeyboardButton(text="👌 Частично", callback_data="review_feedback:3"),
                 InlineKeyboardButton(text="👎 Нет", callback_data="review_feedback:1"),
             ]
+        ]
+    )
+
+
+def feedback_skip_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="➡️ Пропустить", callback_data="feedback_comment_skip")]
         ]
     )
 

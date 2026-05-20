@@ -3,13 +3,16 @@
 """
 from __future__ import annotations
 
+from html import escape
 from typing import Union
 
 from aiogram import F, Router
+from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
 from keyboards.inline import (
+    feedback_skip_keyboard,
     final_keyboard,
     outfit_result_keyboard,
     result_feedback_keyboard,
@@ -35,6 +38,10 @@ def _format_reasons(reasons: list[str]) -> str:
     return "\n".join(f"  • {reason}" for reason in reasons)
 
 
+def _has_real_links(outfit) -> bool:
+    return any(link.url for link in outfit.purchase_links)
+
+
 def _format_outfit(recommendation: Recommendation, idx: int) -> str:
     outfit = recommendation.outfit
     reference_block = ""
@@ -45,16 +52,13 @@ def _format_outfit(recommendation: Recommendation, idx: int) -> str:
         )
 
     links_block = ""
-    if outfit.purchase_links:
-        prepared = []
-        for link in outfit.purchase_links:
-            if link.article:
-                prepared.append(f"{link.label}: артикул <code>{link.article}</code>")
-            elif link.url:
-                prepared.append(f"{link.label}: {link.url}")
-            else:
-                prepared.append(link.label)
-        links_block = "\n\n🛍 <b>Что можно докупить:</b>\n" + "\n".join(f"  • {item}" for item in prepared)
+    if _has_real_links(outfit):
+        prepared = [
+            f"{link.label}: {link.url}"
+            for link in outfit.purchase_links
+            if link.url
+        ]
+        links_block = "\n\n🛍 <b>Где искать:</b>\n" + "\n".join(f"  • {item}" for item in prepared)
 
     return (
         f"<b>Вариант {idx} — {outfit.name}</b>\n\n"
@@ -110,7 +114,10 @@ async def show_results(message: Union[Message, CallbackQuery], state: FSMContext
     for idx, recommendation in enumerate(results, start=1):
         await target.answer(  # type: ignore[union-attr]
             _format_outfit(recommendation, idx),
-            reply_markup=outfit_result_keyboard(recommendation.outfit.id),
+            reply_markup=outfit_result_keyboard(
+                recommendation.outfit.id,
+                show_links=_has_real_links(recommendation.outfit),
+            ),
             parse_mode="HTML",
         )
 
@@ -187,22 +194,19 @@ async def on_links(callback: CallbackQuery) -> None:
     outfit_id = callback.data.split(":")[1]  # type: ignore[union-attr]
     outfit = find_outfit(outfit_id)
     storage.record_event(callback.from_user.id, "links_opened", {"outfit_id": outfit_id})
-    if outfit and outfit.purchase_links:
-        lines = []
-        for link in outfit.purchase_links:
-            if link.article:
-                lines.append(f"• <b>{link.label}</b>: артикул <code>{link.article}</code>")
-            elif link.url:
-                lines.append(f"• <b>{link.label}</b>: {link.url}")
-            else:
-                lines.append(f"• <b>{link.label}</b>")
+    if outfit and _has_real_links(outfit):
+        lines = [
+            f"• <b>{link.label}</b>: {link.url}"
+            for link in outfit.purchase_links
+            if link.url
+        ]
         await callback.message.answer(  # type: ignore[union-attr]
-            "🛍 <b>Ссылки и артикулы для образа:</b>\n\n" + "\n".join(lines),
+            "🛍 <b>Где искать вещи из образа:</b>\n\n" + "\n".join(lines),
             parse_mode="HTML",
         )
     else:
         await callback.message.answer(  # type: ignore[union-attr]
-            "Для этого варианта команда пока не добавила артикулы. Можно ориентироваться на тип вещи и собрать аналог из того, что уже есть.",
+            "Для этого варианта команда пока не добавила готовые ссылки. Ориентируйся на тип вещи и собери аналог из того, что уже есть в гардеробе.",
             parse_mode="HTML",
         )
     await callback.answer()
@@ -264,15 +268,60 @@ async def process_check_outfit(message: Message, state: FSMContext) -> None:
     await state.clear()
 
 
+async def _maybe_request_feedback_comment(
+    callback: CallbackQuery, state: FSMContext, score: int, kind: str
+) -> None:
+    """Если оценка низкая — спросить опциональный комментарий «что не зашло»."""
+    if score >= 5:
+        return
+    await state.set_state(OutfitForm.feedback_comment)
+    await state.update_data(feedback_kind=kind, feedback_score=score)
+    prompt = (
+        "Спасибо! Если коротко — <b>что не зашло?</b>\n"
+        "Можно одной фразой. Или нажми «Пропустить» / отправь /skip."
+    )
+    await callback.message.answer(prompt, parse_mode="HTML", reply_markup=feedback_skip_keyboard())  # type: ignore[union-attr]
+
+
 @router.callback_query(F.data.startswith("result_feedback:"))
-async def result_feedback(callback: CallbackQuery) -> None:
+async def result_feedback(callback: CallbackQuery, state: FSMContext) -> None:
     score = int(callback.data.split(":")[1])  # type: ignore[union-attr]
     storage.record_event(callback.from_user.id, "result_feedback", {"score": score})
     await callback.answer("Спасибо, это поможет нам улучшать подбор.")
+    await _maybe_request_feedback_comment(callback, state, score, "result")
 
 
 @router.callback_query(F.data.startswith("review_feedback:"))
-async def review_feedback(callback: CallbackQuery) -> None:
+async def review_feedback(callback: CallbackQuery, state: FSMContext) -> None:
     score = int(callback.data.split(":")[1])  # type: ignore[union-attr]
     storage.record_event(callback.from_user.id, "review_feedback", {"score": score})
     await callback.answer("Спасибо за оценку разбора.")
+    await _maybe_request_feedback_comment(callback, state, score, "review")
+
+
+@router.message(OutfitForm.feedback_comment, Command("skip"))
+async def feedback_comment_skip_cmd(message: Message, state: FSMContext) -> None:
+    await state.clear()
+    await message.answer("Окей, пропустил 👍")
+
+
+@router.callback_query(OutfitForm.feedback_comment, F.data == "feedback_comment_skip")
+async def feedback_comment_skip_callback(callback: CallbackQuery, state: FSMContext) -> None:
+    await state.clear()
+    await callback.answer("Окей, пропустил")
+    await callback.message.edit_reply_markup(reply_markup=None)  # type: ignore[union-attr]
+
+
+@router.message(OutfitForm.feedback_comment)
+async def feedback_comment_text(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    kind = data.get("feedback_kind", "result")
+    score = data.get("feedback_score")
+    text = (message.text or "").strip()[:500]
+    if not text:
+        await message.answer("Кажется, ничего не отправилось. Попробуй ещё раз или нажми /skip.")
+        return
+    event_name = f"{kind}_feedback_comment"
+    storage.record_event(message.from_user.id, event_name, {"score": score, "text": text})
+    await state.clear()
+    await message.answer(f"🙏 Спасибо за комментарий: <i>«{escape(text)}»</i>", parse_mode="HTML")

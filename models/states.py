@@ -16,6 +16,8 @@ class OutfitForm(StatesGroup):
     result = State()         # Показ результатов
     check_outfit = State()   # «Проверить мой образ» - ожидание текста
     item_anchor = State()    # Ожидание ключевой вещи пользователя
+    weather_city = State()   # Ожидание названия города для авто-определения погоды
     profile_colors = State()     # Ввод любимых цветов
     profile_disliked = State()   # Ввод анти-предпочтений
     profile_key_items = State()  # Ввод ключевых вещей гардероба
+    feedback_comment = State()   # Опциональный комментарий после низкой оценки

@@ -18,6 +18,11 @@
 14. `premium_interest_rate = premium_interest / total_users`.
 15. `satisfaction_rate` — средняя оценка полезности подборки.
 16. `review_satisfaction_rate` — средняя оценка сценария разбора образа.
+17. `result_feedback_distribution` — распределение оценок результата (positive/neutral/negative).
+18. `review_feedback_distribution` — распределение оценок разбора образа.
+19. `recent_feedback_comments` — последние 5 текстовых комментариев для каждого вида (result/review) для качественного анализа.
+20. `weather_auto_usage_rate = weather_auto_succeeded / quiz_started` — какая доля анкет пользуется авто-определением погоды.
+21. `weather_auto_success_rate = weather_auto_succeeded / weather_auto_attempted` — доля успешных запросов OWM (показатель качества интеграции).
 
 События, на которых это держится:
 - `bot_started`
@@ -36,5 +41,10 @@
 - `review_completed`
 - `result_feedback`
 - `review_feedback`
+- `result_feedback_comment` — опциональный текст «что не зашло» после оценки 1/3 результата подбора.
+- `review_feedback_comment` — опциональный текст после оценки 1/3 разбора образа.
+- `weather_auto_attempted` — клик «📍 По моему городу» на шаге погоды.
+- `weather_auto_succeeded` — успешный ответ OWM API с погодой.
+- `weather_auto_failed` — ошибка/пустой ответ OWM (показатель проблем интеграции).
 - `premium_viewed`
 - `premium_interest`

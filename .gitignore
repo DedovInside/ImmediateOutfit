@@ -8,6 +8,9 @@ venv/
 .env
 *.log
 *.db
+*.db-shm
+*.db-wal
+*.db-journal
 .DS_Store
 
 .vscode/
