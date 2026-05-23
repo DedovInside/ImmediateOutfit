@@ -7,8 +7,6 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass
 
-import aiohttp
-
 OWM_URL = "https://api.openweathermap.org/data/2.5/weather"
 TIMEOUT_SECONDS = 5
 CACHE_TTL_SECONDS = 600  # 10 минут
@@ -53,6 +51,11 @@ def _cache_set(city_key: str, snapshot: WeatherSnapshot) -> None:
 
 async def fetch_weather(city: str, api_key: str) -> WeatherSnapshot | None:
     """Возвращает WeatherSnapshot или None при любой ошибке."""
+    try:
+        import aiohttp
+    except ImportError:
+        return None
+
     if not city.strip() or not api_key:
         return None
     city_key = city.strip().lower()

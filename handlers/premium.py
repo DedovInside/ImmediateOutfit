@@ -6,6 +6,7 @@ from aiogram.types import CallbackQuery
 
 from keyboards.inline import premium_keyboard
 from services import storage
+from handlers.ui import clear_clicked_keyboard
 
 router = Router()
 
@@ -23,6 +24,7 @@ PREMIUM_TEXT = (
 @router.callback_query(F.data == "premium_info")
 async def premium_info(callback: CallbackQuery) -> None:
     storage.record_event(callback.from_user.id, "premium_viewed")
+    await clear_clicked_keyboard(callback)
     await callback.message.answer(PREMIUM_TEXT, parse_mode="HTML", reply_markup=premium_keyboard())  # type: ignore[union-attr]
     await callback.answer()
 
@@ -30,4 +32,5 @@ async def premium_info(callback: CallbackQuery) -> None:
 @router.callback_query(F.data == "premium_interest")
 async def premium_interest(callback: CallbackQuery) -> None:
     storage.record_event(callback.from_user.id, "premium_interest")
+    await clear_clicked_keyboard(callback)
     await callback.answer("Супер, записал твой интерес к premium.", show_alert=True)

@@ -40,7 +40,15 @@ WEATHER_TITLES = {
     "rain": "дождь",
 }
 
+MOOD_TITLES = {
+    "neutral": "спокойный и носибельный вайб",
+    "cozy": "уютное настроение",
+    "bright": "более заметный образ",
+    "smart": "собранный вид",
+}
+
 BUDGET_ORDER = {"low": 0, "medium": 1, "high": 2}
+TEAM_CURATED_SOURCE = "team_curated_txt"
 
 
 @dataclass
@@ -57,6 +65,7 @@ class ReviewResult:
     strengths: list[str]
     concerns: list[str]
     suggestions: list[str]
+    needs_more_input: bool = False
 
 
 def _keyword_overlap(text: str, haystack: list[str]) -> int:
@@ -67,7 +76,16 @@ def _keyword_overlap(text: str, haystack: list[str]) -> int:
 def _item_anchor_score(item_anchor: str | None, outfit: Outfit) -> int:
     if not item_anchor:
         return 0
-    outfit_text = " ".join(outfit.items.values()).lower()
+    outfit_text = " ".join(
+        [
+            outfit.name,
+            outfit.description,
+            outfit.tip,
+            " ".join(outfit.items.values()),
+            " ".join(outfit.palette),
+            " ".join(outfit.styling_notes),
+        ]
+    ).lower()
     anchor_words = [word.strip(" ,.!?") for word in item_anchor.lower().split()]
     return sum(1 for word in anchor_words if len(word) > 2 and word in outfit_text)
 
@@ -92,6 +110,36 @@ def _budget_score(user_budget: str | None, outfit_budget: str) -> int:
     return -1
 
 
+def _mood_score(mood: str | None, outfit: Outfit) -> int:
+    if not mood:
+        return 0
+    searchable = " ".join([
+        outfit.name,
+        outfit.description,
+        outfit.tip,
+        " ".join(outfit.items.values()),
+        " ".join(outfit.palette),
+        " ".join(outfit.dress_code),
+    ]).lower()
+    if mood == "neutral":
+        return 2 if any(style in outfit.style for style in ("base_minimal", "casual")) else 0
+    if mood == "cozy":
+        cozy_tokens = ("свитер", "худи", "кардиган", "мягк", "уют", "тепл", "пальто")
+        return 2 if any(token in searchable for token in cozy_tokens) else 0
+    if mood == "bright":
+        accent_tokens = ("акцент", "ярк", "голуб", "светл", "выраз", "интерес", "аксессуар")
+        score = 1 if any(token in searchable for token in accent_tokens) else 0
+        return score + (1 if "impressive" in outfit.priority else 0)
+    if mood == "smart":
+        return 2 if "classic" in outfit.style or any(tag in searchable for tag in ("пиджак", "рубашка", "пальто", "лофер")) else 0
+    return 0
+
+
+def _curation_score(outfit: Outfit) -> int:
+    """Командные подборки — основной каталог MVP; старая база остаётся fallback-слоем."""
+    return 2 if outfit.source == TEAM_CURATED_SOURCE else 0
+
+
 def _build_reasons(
     answers: dict[str, str],
     outfit: Outfit,
@@ -111,6 +159,8 @@ def _build_reasons(
         reasons.append("учитывает вещь, вокруг которой ты хочешь собрать образ")
     if profile and profile.preferred_colors and _profile_color_score(profile, outfit) > 0:
         reasons.append("поддерживает твои любимые цветовые предпочтения")
+    if answers.get("mood") and _mood_score(answers["mood"], outfit) > 0:
+        reasons.append(f"попадает в {MOOD_TITLES.get(answers['mood'], 'настроение дня')}")
     # Сохраняем короткость и уникальность объяснений.
     unique_reasons: list[str] = []
     for reason in reasons:
@@ -154,6 +204,8 @@ def recommend(
             score += 2
         if weather_tag and outfit.weather == ["rain"] and weather_tag != "rain":
             score -= 3
+        score += _curation_score(outfit)
+        score += _mood_score(answers.get("mood"), outfit)
         if answers.get("budget"):
             score += _budget_score(answers["budget"], outfit.budget_level)
         if profile:
@@ -178,7 +230,13 @@ def recommend(
         reasons = _build_reasons(answers, outfit, profile, item_anchor)
         scored.append(Recommendation(outfit=outfit, score=score, reasons=reasons))
 
-    scored.sort(key=lambda recommendation: recommendation.score, reverse=True)
+    scored.sort(
+        key=lambda recommendation: (
+            recommendation.score,
+            _curation_score(recommendation.outfit),
+        ),
+        reverse=True,
+    )
 
     if scored:
         return scored[:limit]
@@ -193,7 +251,14 @@ def recommend(
         if user_occasion and user_occasion not in outfit.occasion:
             continue
         reasons = _build_reasons(answers, outfit, profile, item_anchor)
-        fallback.append(Recommendation(outfit=outfit, score=1, reasons=reasons))
+        fallback.append(Recommendation(outfit=outfit, score=_curation_score(outfit) or 1, reasons=reasons))
+    fallback.sort(
+        key=lambda recommendation: (
+            recommendation.score,
+            _curation_score(recommendation.outfit),
+        ),
+        reverse=True,
+    )
     return fallback[:limit]
 
 
@@ -209,6 +274,22 @@ def review_user_outfit(user_text: str) -> ReviewResult:
     colors_found = {name for token, name in COLOR_WORDS.items() if token in text}
     sport_present = any(keyword in text for keyword in SPORT_KEYWORDS)
     formal_present = any(keyword in text for keyword in FORMAL_KEYWORDS)
+
+    if len(text.strip()) < 8 or not any((top_present, bottom_present, shoes_present, sport_present, formal_present)):
+        return ReviewResult(
+            headline="Пока не могу нормально проверить образ.",
+            score_label="нужно больше деталей",
+            strengths=[],
+            concerns=[
+                "я не увидел в описании конкретных вещей",
+            ],
+            suggestions=[
+                "напиши хотя бы верх, низ и обувь",
+                "можно добавить цвет, ситуацию и погоду",
+                "пример: черная водолазка, голубые джинсы, белые кеды, иду на учебу",
+            ],
+            needs_more_input=True,
+        )
 
     if top_present and bottom_present:
         strengths.append("у образа уже есть понятный каркас: верх и низ собраны")
@@ -252,4 +333,5 @@ def review_user_outfit(user_text: str) -> ReviewResult:
         strengths=strengths[:3],
         concerns=concerns[:3],
         suggestions=suggestions[:3],
+        needs_more_input=False,
     )

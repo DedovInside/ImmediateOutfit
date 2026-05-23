@@ -8,6 +8,7 @@ from aiogram.types import CallbackQuery, Message
 
 from keyboards.inline import start_keyboard
 from services import storage
+from handlers.ui import clear_clicked_keyboard
 
 router = Router()
 
@@ -43,8 +44,21 @@ async def cmd_start(message: Message, state: FSMContext) -> None:
 @router.callback_query(F.data == "menu_home")
 async def menu_home(callback: CallbackQuery, state: FSMContext) -> None:
     await state.clear()
+    await clear_clicked_keyboard(callback)
     await callback.message.answer(  # type: ignore[union-attr]
         WELCOME_TEXT,
+        reply_markup=_menu_keyboard(callback.from_user.id),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "cancel_flow")
+async def cancel_flow(callback: CallbackQuery, state: FSMContext) -> None:
+    await state.clear()
+    await clear_clicked_keyboard(callback)
+    storage.record_event(callback.from_user.id, "flow_cancelled")
+    await callback.message.answer(  # type: ignore[union-attr]
+        "Окей, отменил текущий сценарий. Возвращаю в главное меню.",
         reply_markup=_menu_keyboard(callback.from_user.id),
     )
     await callback.answer()

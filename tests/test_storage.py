@@ -11,11 +11,15 @@ from services.catalog import find_outfit
 class StorageTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temp_dir = tempfile.TemporaryDirectory()
+        self.original_db_path = storage.DB_PATH
+        storage.close_connection()
         storage.DB_PATH = Path(self.temp_dir.name) / "test.db"
         storage.init_db()
         storage.touch_user(1, username="alice", first_name="Alice")
 
     def tearDown(self) -> None:
+        storage.close_connection()
+        storage.DB_PATH = self.original_db_path
         self.temp_dir.cleanup()
 
     def test_profile_roundtrip(self) -> None:

@@ -11,8 +11,9 @@ class OutfitForm(StatesGroup):
     weather = State()        # Вопрос 2: Какая погода?
     activity = State()       # Вопрос 3: Насколько насыщенный день?
     priority = State()       # Вопрос 4: Что важнее сегодня?
-    budget = State()         # Вопрос 5: Бюджет
-    style = State()          # Вопрос 6: Стиль
+    mood = State()           # Вопрос 5: Вайб / настроение образа
+    budget = State()         # Вопрос 6: Бюджет
+    style = State()          # Вопрос 7: Стиль
     result = State()         # Показ результатов
     check_outfit = State()   # «Проверить мой образ» - ожидание текста
     item_anchor = State()    # Ожидание ключевой вещи пользователя

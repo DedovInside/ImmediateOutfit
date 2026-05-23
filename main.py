@@ -22,7 +22,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="ImmediateOutfit Stats", version="2.0", lifespan=lifespan)
 DOCS_DIR = (Path(__file__).resolve().parent / "docs").resolve()
-ALLOWED_ARTIFACTS = {"metrics", "sprint_map", "roadmap", "unit_economics", "qa_checklist"}
+ALLOWED_ARTIFACTS = {"metrics", "sprint_map", "roadmap", "unit_economics", "qa_checklist", "mvp_scope"}
 
 
 def _percent(value: float) -> str:
@@ -394,6 +394,7 @@ async def dashboard():
             <a href="/artifacts/roadmap">Roadmap</a>
             <a href="/artifacts/unit_economics">Unit Economics</a>
             <a href="/artifacts/qa_checklist">QA Checklist</a>
+            <a href="/artifacts/mvp_scope">MVP Scope</a>
             <a href="/outfits">Outfits Catalog</a>
             <a href="/docs">API Docs</a>
         </div>

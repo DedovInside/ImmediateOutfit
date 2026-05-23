@@ -18,11 +18,14 @@ from keyboards.inline import (
     result_feedback_keyboard,
     review_feedback_keyboard,
     start_keyboard,
+    cancel_keyboard,
 )
 from models.states import OutfitForm
 from services import storage
+from services.ai_assistant import ai_review_outfit, is_ai_enabled
 from services.catalog import find_outfit, get_outfits
 from services.recommender import Recommendation, recommend, review_user_outfit
+from handlers.ui import clear_clicked_keyboard
 
 router = Router()
 OUTFITS = get_outfits()
@@ -39,7 +42,46 @@ def _format_reasons(reasons: list[str]) -> str:
 
 
 def _has_real_links(outfit) -> bool:
-    return any(link.url for link in outfit.purchase_links)
+    return any(_is_real_purchase_link(link) for link in outfit.purchase_links)
+
+
+def _is_real_purchase_link(link) -> bool:
+    if link.url:
+        return True
+    if not link.article:
+        return False
+    return not link.article.upper().startswith("IO-")
+
+
+def _format_palette(outfit) -> str:
+    if not outfit.palette:
+        return ""
+    return "\n\n🎨 <b>Палитра:</b>\n" + "\n".join(f"  • {item}" for item in outfit.palette[:4])
+
+
+def _format_styling_notes(outfit) -> str:
+    if not outfit.styling_notes:
+        return ""
+    return "\n\n🧩 <b>Как носить:</b>\n" + "\n".join(f"  • {item}" for item in outfit.styling_notes[:2])
+
+
+def _format_purchase_summary(outfit) -> str:
+    if not _has_real_links(outfit):
+        return ""
+    marketplaces: list[str] = []
+    for link in outfit.purchase_links:
+        if not _is_real_purchase_link(link):
+            continue
+        marketplace = link.label.split(":", 1)[0].strip()
+        if marketplace and marketplace not in marketplaces:
+            marketplaces.append(marketplace)
+    if not marketplaces:
+        return ""
+    return (
+        "\n\n🛍 <b>Есть артикулы:</b> "
+        f"{', '.join(marketplaces)}\n"
+        "Нажми «Где искать», чтобы открыть полный список."
+    )
 
 
 def _format_outfit(recommendation: Recommendation, idx: int) -> str:
@@ -51,23 +93,16 @@ def _format_outfit(recommendation: Recommendation, idx: int) -> str:
             f"{outfit.reference.description}"
         )
 
-    links_block = ""
-    if _has_real_links(outfit):
-        prepared = [
-            f"{link.label}: {link.url}"
-            for link in outfit.purchase_links
-            if link.url
-        ]
-        links_block = "\n\n🛍 <b>Где искать:</b>\n" + "\n".join(f"  • {item}" for item in prepared)
-
     return (
         f"<b>Вариант {idx} — {outfit.name}</b>\n\n"
         f"{_format_items(outfit.items)}\n\n"
         f"{outfit.description}\n\n"
         f"💡 <i>{outfit.tip}</i>\n\n"
         f"🧠 <b>Почему это подходит:</b>\n{_format_reasons(recommendation.reasons) or '  • Подобрал вариант под твой текущий запрос.'}"
+        f"{_format_palette(outfit)}"
+        f"{_format_styling_notes(outfit)}"
         f"{reference_block}"
-        f"{links_block}"
+        f"{_format_purchase_summary(outfit)}"
     )
 
 
@@ -79,6 +114,7 @@ async def show_results(message: Union[Message, CallbackQuery], state: FSMContext
         "weather": data.get("weather"),
         "activity": data.get("activity"),
         "priority": data.get("priority"),
+        "mood": data.get("mood"),
         "budget": data.get("budget"),
         "style": data.get("style"),
     }
@@ -137,6 +173,7 @@ async def show_results(message: Union[Message, CallbackQuery], state: FSMContext
 async def on_show_more(callback: CallbackQuery, state: FSMContext) -> None:
     await state.set_state(OutfitForm.result)
     storage.record_event(callback.from_user.id, "show_more")
+    await clear_clicked_keyboard(callback)
     await show_results(callback, state, callback.from_user.id)
     await callback.answer()
 
@@ -196,9 +233,9 @@ async def on_links(callback: CallbackQuery) -> None:
     storage.record_event(callback.from_user.id, "links_opened", {"outfit_id": outfit_id})
     if outfit and _has_real_links(outfit):
         lines = [
-            f"• <b>{link.label}</b>: {link.url}"
+            f"• <b>{link.label}</b>: {link.url or 'арт. ' + link.article}"
             for link in outfit.purchase_links
-            if link.url
+            if _is_real_purchase_link(link)
         ]
         await callback.message.answer(  # type: ignore[union-attr]
             "🛍 <b>Где искать вещи из образа:</b>\n\n" + "\n".join(lines),
@@ -214,6 +251,7 @@ async def on_links(callback: CallbackQuery) -> None:
 
 @router.callback_query(F.data == "show_saved")
 async def on_show_saved(callback: CallbackQuery) -> None:
+    await clear_clicked_keyboard(callback)
     saved = storage.get_saved(callback.from_user.id)
     if not saved:
         await callback.answer("У тебя пока нет сохранённых образов 🤷", show_alert=True)
@@ -236,6 +274,7 @@ async def on_show_saved(callback: CallbackQuery) -> None:
 async def on_check_outfit(callback: CallbackQuery, state: FSMContext) -> None:
     await state.set_state(OutfitForm.check_outfit)
     storage.record_event(callback.from_user.id, "review_started")
+    await clear_clicked_keyboard(callback)
     await callback.message.answer(  # type: ignore[union-attr]
         "🔍 <b>Проверка образа</b>\n\n"
         "Опиши, что ты планируешь надеть, а я скажу:\n"
@@ -244,14 +283,33 @@ async def on_check_outfit(callback: CallbackQuery, state: FSMContext) -> None:
         "- чем можно усилить образ\n\n"
         "✍️ Пример: <i>черная водолазка, голубые джинсы, белые кеды</i>",
         parse_mode="HTML",
+        reply_markup=cancel_keyboard(),
     )
     await callback.answer()
 
 
 @router.message(OutfitForm.check_outfit)
 async def process_check_outfit(message: Message, state: FSMContext) -> None:
-    review = review_user_outfit(message.text or "")
-    storage.record_event(message.from_user.id, "review_completed")
+    user_text = message.text or ""
+    fallback_review = review_user_outfit(user_text)
+    if fallback_review.needs_more_input:
+        text = (
+            f"🔎 <b>{fallback_review.headline}</b>\n"
+            f"Оценка: <b>{fallback_review.score_label}</b>\n\n"
+            f"<b>Что не хватает:</b>\n" + "\n".join(f"• {item}" for item in fallback_review.concerns) + "\n\n"
+            f"<b>Как описать:</b>\n" + "\n".join(f"• {item}" for item in fallback_review.suggestions)
+        )
+        await message.answer(text, parse_mode="HTML", reply_markup=cancel_keyboard())
+        return
+
+    profile = storage.get_profile(message.from_user.id)
+    ai_review = await ai_review_outfit(user_text, profile) if is_ai_enabled() else None
+    review = ai_review or fallback_review
+    storage.record_event(
+        message.from_user.id,
+        "review_completed",
+        {"source": "deepseek" if ai_review else "rule_based"},
+    )
     text = (
         f"🔎 <b>{review.headline}</b>\n"
         f"Оценка: <b>{review.score_label}</b>\n\n"
@@ -287,6 +345,7 @@ async def _maybe_request_feedback_comment(
 async def result_feedback(callback: CallbackQuery, state: FSMContext) -> None:
     score = int(callback.data.split(":")[1])  # type: ignore[union-attr]
     storage.record_event(callback.from_user.id, "result_feedback", {"score": score})
+    await clear_clicked_keyboard(callback)
     await callback.answer("Спасибо, это поможет нам улучшать подбор.")
     await _maybe_request_feedback_comment(callback, state, score, "result")
 
@@ -295,6 +354,7 @@ async def result_feedback(callback: CallbackQuery, state: FSMContext) -> None:
 async def review_feedback(callback: CallbackQuery, state: FSMContext) -> None:
     score = int(callback.data.split(":")[1])  # type: ignore[union-attr]
     storage.record_event(callback.from_user.id, "review_feedback", {"score": score})
+    await clear_clicked_keyboard(callback)
     await callback.answer("Спасибо за оценку разбора.")
     await _maybe_request_feedback_comment(callback, state, score, "review")
 

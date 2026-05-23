@@ -28,6 +28,7 @@
 - `bot_started`
 - `quiz_started`
 - `question_answered`
+- `question_answered` со step=`mood` — выбранный вайб образа (спокойно/уютно/заметнее/собранно), используется для анализа предпочтений и качества рекомендаций.
 - `weather_selected`
 - `quiz_completed`
 - `results_viewed`
@@ -37,8 +38,10 @@
 - `links_opened`
 - `profile_updated`
 - `item_flow_started`
+- `ai_item_outfits_generated` — DeepSeek успешно собрал варианты вокруг вещи-якоря.
+- `ai_item_outfits_fallback` — DeepSeek недоступен или выключен, сценарий подбора под вещь ушёл в кнопочный fallback.
 - `review_started`
-- `review_completed`
+- `review_completed` — содержит `source=deepseek` или `source=rule_based`, чтобы сравнивать AI и fallback.
 - `result_feedback`
 - `review_feedback`
 - `result_feedback_comment` — опциональный текст «что не зашло» после оценки 1/3 результата подбора.

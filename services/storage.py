@@ -40,6 +40,15 @@ def _get_conn() -> sqlite3.Connection:
     return _connection
 
 
+def close_connection() -> None:
+    """Закрывает текущее SQLite-соединение. Нужно тестам и аккуратной смене DB_PATH."""
+    global _connection, _connection_path
+    if _connection is not None:
+        _connection.close()
+    _connection = None
+    _connection_path = None
+
+
 def init_db() -> None:
     conn = _get_conn()
     conn.executescript(
@@ -243,10 +252,11 @@ def get_saved_outfit_ids(user_id: int) -> set[str]:
 
 def get_all_events() -> list[dict[str, Any]]:
     rows = _get_conn().execute(
-        "SELECT user_id, event_name, payload_json, created_at FROM events ORDER BY created_at ASC"
+        "SELECT id, user_id, event_name, payload_json, created_at FROM events ORDER BY id ASC"
     ).fetchall()
     return [
         {
+            "id": row["id"],
             "user_id": row["user_id"],
             "event_name": row["event_name"],
             "payload": json.loads(row["payload_json"]),
@@ -293,6 +303,7 @@ def get_metrics() -> dict[str, Any]:
             text = payload.get("text")
             if text:
                 recent_comments[kind].append({
+                    "id": event["id"],
                     "score": payload.get("score"),
                     "text": text,
                     "created_at": event["created_at"],
@@ -300,7 +311,7 @@ def get_metrics() -> dict[str, Any]:
 
     # Сортируем по убыванию даты и оставляем последние 5 для каждого вида.
     for kind in recent_comments:
-        recent_comments[kind].sort(key=lambda item: item["created_at"], reverse=True)
+        recent_comments[kind].sort(key=lambda item: (item["created_at"], item.get("id", 0)), reverse=True)
         recent_comments[kind] = recent_comments[kind][:5]
 
     quiz_started = counts["quiz_started"]

@@ -35,3 +35,6 @@ class Outfit(BaseModel):
     why_it_fits: list[str] = []
     reference: OutfitReference | None = None
     purchase_links: list[PurchaseLink] = Field(default_factory=list)
+    palette: list[str] = Field(default_factory=list)
+    styling_notes: list[str] = Field(default_factory=list)
+    source: str | None = None

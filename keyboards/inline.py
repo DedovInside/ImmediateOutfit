@@ -54,6 +54,13 @@ PRIORITY_OPTIONS = [
     ("✨ Хочу выглядеть эффектно", "impressive"),
 ]
 
+MOOD_OPTIONS = [
+    ("🌿 Спокойно", "neutral"),
+    ("🧶 Уютно", "cozy"),
+    ("✨ Заметнее", "bright"),
+    ("🧥 Собранно", "smart"),
+]
+
 BUDGET_OPTIONS = [
     ("💸 Экономно", "low"),
     ("💳 Средний", "medium"),
@@ -77,6 +84,7 @@ def _choice_keyboard(
     builder.adjust(width)
     if back:
         builder.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="back"))
+    builder.row(InlineKeyboardButton(text="✖️ Отменить", callback_data="cancel_flow"))
     return builder.as_markup()
 
 
@@ -97,6 +105,7 @@ def weather_keyboard(back: bool = False, show_auto: bool = True) -> InlineKeyboa
         builder.row(InlineKeyboardButton(text="📍 По моему городу", callback_data="weather_auto"))
     if back:
         builder.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="back"))
+    builder.row(InlineKeyboardButton(text="✖️ Отменить", callback_data="cancel_flow"))
     return builder.as_markup()
 
 
@@ -106,6 +115,10 @@ def activity_keyboard(back: bool = False) -> InlineKeyboardMarkup:
 
 def priority_keyboard(back: bool = False) -> InlineKeyboardMarkup:
     return _choice_keyboard(PRIORITY_OPTIONS, "priority", width=2, back=back)
+
+
+def mood_keyboard(back: bool = False) -> InlineKeyboardMarkup:
+    return _choice_keyboard(MOOD_OPTIONS, "mood", width=2, back=back)
 
 
 def budget_keyboard(back: bool = False) -> InlineKeyboardMarkup:
@@ -166,12 +179,21 @@ def feedback_skip_keyboard() -> InlineKeyboardMarkup:
     )
 
 
+def cancel_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="✖️ Отменить", callback_data="cancel_flow")]
+        ]
+    )
+
+
 def final_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text="🔁 Подобрать заново", callback_data="start_quiz")],
             [InlineKeyboardButton(text="⚡ Быстрый подбор", callback_data="quick_start")],
             [InlineKeyboardButton(text="👚 Под мою вещь", callback_data="item_flow_start")],
+            [InlineKeyboardButton(text="🔍 Проверить мой образ", callback_data="check_outfit")],
             [InlineKeyboardButton(text="📂 Мои сохранённые", callback_data="show_saved")],
             [InlineKeyboardButton(text="🧬 Мой профиль", callback_data="profile_view")],
             [InlineKeyboardButton(text="✨ Premium", callback_data="premium_info")],
