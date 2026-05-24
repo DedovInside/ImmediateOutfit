@@ -9,7 +9,7 @@ from typing import Union
 from aiogram import F, Router
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import CallbackQuery, FSInputFile, InputMediaPhoto, Message
 
 from keyboards.inline import (
     feedback_skip_keyboard,
@@ -24,6 +24,7 @@ from models.states import OutfitForm
 from services import storage
 from services.ai_assistant import ai_review_outfit, is_ai_enabled
 from services.catalog import find_outfit, get_outfits
+from services.references import get_reference_images
 from services.recommender import Recommendation, recommend, review_user_outfit
 from handlers.ui import clear_clicked_keyboard
 
@@ -218,6 +219,16 @@ async def on_reference(callback: CallbackQuery) -> None:
         if outfit.reference.image_url:
             text += f"\n\nСсылка на референс: {outfit.reference.image_url}"
         await callback.message.answer(text, parse_mode="HTML")  # type: ignore[union-attr]
+        images = get_reference_images(outfit)
+        if images:
+            if len(images) == 1:
+                await callback.message.answer_photo(  # type: ignore[union-attr]
+                    FSInputFile(images[0]),
+                    caption="Визуальный референс образа",
+                )
+            else:
+                media = [InputMediaPhoto(media=FSInputFile(path)) for path in images]
+                await callback.message.answer_media_group(media=media)  # type: ignore[union-attr]
     else:
         await callback.message.answer(  # type: ignore[union-attr]
             "Для этого образа пока нет отдельного визуального референса, но каркас образа уже можно собрать по списку вещей.",

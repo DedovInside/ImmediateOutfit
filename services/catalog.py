@@ -33,6 +33,9 @@ def get_outfits() -> list[Outfit]:
         extra = curation.get(item["id"], {})
         outfits.append(Outfit(**item, **extra))
     for item in team_outfits:
+        reference = item.get("reference")
+        if isinstance(reference, dict):
+            reference.setdefault("local_folder", f"assets/outfit_references/{item['id']}")
         outfits.append(Outfit(**item))
     return outfits
 

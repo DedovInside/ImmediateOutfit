@@ -15,6 +15,7 @@ class OutfitReference(BaseModel):
     title: str
     description: str
     image_url: str | None = None
+    local_folder: str | None = None
 
 
 class Outfit(BaseModel):
