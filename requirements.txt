@@ -5,4 +5,5 @@ pydantic-settings>=2.0
 python-dotenv>=1.0
 fastapi
 uvicorn
+openpyxl>=3.1
 

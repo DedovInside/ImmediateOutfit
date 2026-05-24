@@ -3,6 +3,7 @@
 """
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from html import escape
 from typing import Union
 
@@ -15,6 +16,7 @@ from keyboards.inline import (
     feedback_skip_keyboard,
     final_keyboard,
     outfit_result_keyboard,
+    premium_keyboard,
     result_feedback_keyboard,
     review_feedback_keyboard,
     start_keyboard,
@@ -85,6 +87,16 @@ def _format_purchase_summary(outfit) -> str:
     )
 
 
+def _minutes_since(value: str | None) -> float | None:
+    if not value:
+        return None
+    try:
+        started_at = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return round((datetime.now(UTC) - started_at).total_seconds() / 60, 2)
+
+
 def _format_outfit(recommendation: Recommendation, idx: int) -> str:
     outfit = recommendation.outfit
     reference_block = ""
@@ -146,7 +158,15 @@ async def show_results(message: Union[Message, CallbackQuery], state: FSMContext
         last_outfits=[item.outfit.id for item in results],
         last_reasons={item.outfit.id: item.reasons for item in results},
     )
-    storage.record_event(user_id, "results_viewed", {"count": len(results), "flow_mode": data.get("flow_mode", "standard")})
+    storage.record_event(
+        user_id,
+        "results_viewed",
+        {
+            "count": len(results),
+            "flow_mode": data.get("flow_mode", "standard"),
+            "time_to_result_min": _minutes_since(data.get("quiz_started_at")),
+        },
+    )
 
     for idx, recommendation in enumerate(results, start=1):
         await target.answer(  # type: ignore[union-attr]
@@ -314,12 +334,33 @@ async def process_check_outfit(message: Message, state: FSMContext) -> None:
         return
 
     profile = storage.get_profile(message.from_user.id)
+    if is_ai_enabled() and not storage.can_use_ai(message.from_user.id):
+        quota = storage.get_ai_quota(message.from_user.id)
+        storage.record_event(
+            message.from_user.id,
+            "ai_quota_limit_reached",
+            {"scenario": "review", "used": quota["used"], "limit": quota["limit"]},
+        )
+        await message.answer(
+            "AI-лимит бесплатных ответов закончился.\n\n"
+            "Premium будет нужен для увеличенных лимитов AI-разбора, недельных подборок и будущего photo-review.",
+            parse_mode="HTML",
+            reply_markup=premium_keyboard(),
+        )
+        await state.clear()
+        return
+
     ai_review = await ai_review_outfit(user_text, profile) if is_ai_enabled() else None
     review = ai_review or fallback_review
+    quota = storage.consume_ai_quota(message.from_user.id, "review") if ai_review else None
     storage.record_event(
         message.from_user.id,
         "review_completed",
-        {"source": "deepseek" if ai_review else "rule_based"},
+        {
+            "source": "deepseek" if ai_review else "rule_based",
+            "quota_used": quota["used"] if quota else None,
+            "quota_limit": quota["limit"] if quota else None,
+        },
     )
     text = (
         f"🔎 <b>{review.headline}</b>\n"
@@ -330,7 +371,8 @@ async def process_check_outfit(message: Message, state: FSMContext) -> None:
     )
     await message.answer(text, parse_mode="HTML", reply_markup=review_feedback_keyboard())
     await message.answer(
-        "Если хочешь, после этого могу сразу собрать для тебя альтернативный образ под ту же ситуацию.",
+        "Если хочешь, после этого могу сразу собрать для тебя альтернативный образ под ту же ситуацию."
+        + (f"\n\nAI-лимит: {quota['used']}/{quota['limit']} ответов использовано." if quota else ""),
         reply_markup=final_keyboard(),
         parse_mode="HTML",
     )

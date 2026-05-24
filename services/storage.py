@@ -7,7 +7,7 @@ import json
 import sqlite3
 from collections import Counter
 from collections import defaultdict
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -96,6 +96,33 @@ def init_db() -> None:
 
         CREATE INDEX IF NOT EXISTS idx_events_name_created
         ON events(event_name, created_at);
+
+        CREATE TABLE IF NOT EXISTS aarrr_dataset (
+            user_code TEXT PRIMARY KEY,
+            first_contact_at TEXT NOT NULL,
+            scenario_completed INTEGER NOT NULL,
+            time_to_result_min REAL NOT NULL,
+            avg_scenarios REAL NOT NULL,
+            retention_d1 INTEGER NOT NULL,
+            retention_d7 INTEGER NOT NULL,
+            retention_d30 INTEGER NOT NULL,
+            ai_stylist_used INTEGER NOT NULL,
+            session_length_min REAL NOT NULL,
+            bot_requests_count INTEGER NOT NULL,
+            ai_usage_count INTEGER NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS app_meta (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS ai_quotas (
+            user_id INTEGER PRIMARY KEY,
+            used_count INTEGER NOT NULL DEFAULT 0,
+            limit_count INTEGER NOT NULL,
+            updated_at TEXT NOT NULL
+        );
         """
     )
     conn.commit()
@@ -140,6 +167,49 @@ def record_event(user_id: int | None, event_name: str, payload: dict[str, Any] |
             (now, user_id),
         )
     conn.commit()
+
+
+def get_ai_quota(user_id: int) -> dict[str, int]:
+    conn = _get_conn()
+    limit = max(0, int(settings.AI_FREE_LIMIT))
+    row = conn.execute(
+        "SELECT used_count, limit_count FROM ai_quotas WHERE user_id = ?",
+        (user_id,),
+    ).fetchone()
+    if row is None:
+        return {"used": 0, "limit": limit, "remaining": limit}
+    used = int(row["used_count"])
+    current_limit = max(limit, int(row["limit_count"]))
+    return {"used": used, "limit": current_limit, "remaining": max(0, current_limit - used)}
+
+
+def can_use_ai(user_id: int) -> bool:
+    return get_ai_quota(user_id)["remaining"] > 0
+
+
+def consume_ai_quota(user_id: int, scenario: str) -> dict[str, int]:
+    conn = _get_conn()
+    now = _utcnow()
+    quota = get_ai_quota(user_id)
+    new_used = quota["used"] + 1
+    conn.execute(
+        """
+        INSERT INTO ai_quotas (user_id, used_count, limit_count, updated_at)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(user_id) DO UPDATE SET
+            used_count = excluded.used_count,
+            limit_count = excluded.limit_count,
+            updated_at = excluded.updated_at
+        """,
+        (user_id, new_used, quota["limit"], now),
+    )
+    conn.commit()
+    record_event(
+        user_id,
+        "ai_quota_consumed",
+        {"scenario": scenario, "used": new_used, "limit": quota["limit"]},
+    )
+    return {"used": new_used, "limit": quota["limit"], "remaining": max(0, quota["limit"] - new_used)}
 
 
 def save_outfit(user_id: int, outfit: Outfit) -> bool:
@@ -266,6 +336,180 @@ def get_all_events() -> list[dict[str, Any]]:
     ]
 
 
+def _get_aarrr_metrics() -> dict[str, Any]:
+    conn = _get_conn()
+    rows = conn.execute("SELECT * FROM aarrr_dataset ORDER BY user_code").fetchall()
+    if not rows:
+        return {
+            "has_dataset": False,
+            "source": "not_seeded",
+            "new_users": 0,
+            "avg_time_to_result_min": 0,
+            "scenario_completion_rate": 0,
+            "avg_scenarios": 0,
+            "retention_d1": 0,
+            "retention_d7": 0,
+            "retention_d30": 0,
+            "ai_stylist_share": 0,
+            "avg_session_length_min": 0,
+            "avg_bot_requests": 0,
+            "ai_usage_frequency": 0,
+            "cac": 0,
+            "marketing_spend": 0,
+        }
+
+    def avg(field: str) -> float:
+        return sum(float(row[field]) for row in rows) / len(rows)
+
+    marketing_row = conn.execute("SELECT value FROM app_meta WHERE key = 'marketing_spend'").fetchone()
+    marketing_spend = float(marketing_row["value"]) if marketing_row else 2000.0
+    new_users = len(rows)
+    return {
+        "has_dataset": True,
+        "source": "xlsx_seed",
+        "new_users": new_users,
+        "avg_time_to_result_min": round(avg("time_to_result_min"), 2),
+        "scenario_completion_rate": round(avg("scenario_completed"), 2),
+        "avg_scenarios": round(avg("avg_scenarios"), 2),
+        "retention_d1": round(avg("retention_d1"), 2),
+        "retention_d7": round(avg("retention_d7"), 2),
+        "retention_d30": round(avg("retention_d30"), 2),
+        "ai_stylist_share": round(avg("ai_stylist_used"), 2),
+        "avg_session_length_min": round(avg("session_length_min"), 2),
+        "avg_bot_requests": round(avg("bot_requests_count"), 2),
+        "ai_usage_frequency": round(avg("ai_usage_count"), 2),
+        "cac": round(marketing_spend / new_users, 2) if new_users else 0,
+        "marketing_spend": marketing_spend,
+    }
+
+
+def _parse_event_dt(value: str) -> datetime | None:
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def _average(values: list[float]) -> float:
+    return round(sum(values) / len(values), 2) if values else 0
+
+
+def _get_aarrr_event_metrics(events: list[dict[str, Any]], total_users: int) -> dict[str, Any]:
+    """Считает Excel/AARRR-метрики из реальных событий бота.
+
+    `aarrr_dataset` нужен для презентационного сида, а этот блок показывает, что те же
+    показатели можно добывать из нормального event stream без ручной правки Excel.
+    """
+    conn = _get_conn()
+    marketing_row = conn.execute("SELECT value FROM app_meta WHERE key = 'marketing_spend'").fetchone()
+    marketing_spend = float(marketing_row["value"]) if marketing_row else 0.0
+
+    by_user: dict[int, list[dict[str, Any]]] = defaultdict(list)
+    counts = Counter(event["event_name"] for event in events)
+    for event in events:
+        if event["user_id"] is not None:
+            by_user[int(event["user_id"])].append(event)
+
+    completion_flags: list[int] = []
+    time_to_result: list[float] = []
+    scenarios_per_user: list[float] = []
+    session_lengths: list[float] = []
+    bot_requests: list[int] = []
+    ai_usage: list[int] = []
+    ai_user_flags: list[int] = []
+    retention_flags = {1: [], 7: [], 30: []}
+
+    def is_ai_event(event: dict[str, Any]) -> bool:
+        if event["event_name"] == "ai_item_outfits_generated":
+            return True
+        if event["event_name"] == "review_completed":
+            return event["payload"].get("source") == "deepseek"
+        return False
+
+    for user_events in by_user.values():
+        user_events = sorted(user_events, key=lambda event: event["created_at"])
+        summary = next((event["payload"] for event in user_events if event["event_name"] == "session_summary"), None)
+        first_dt = _parse_event_dt(user_events[0]["created_at"])
+        if summary and isinstance(summary.get("session_length_min"), (int, float)):
+            session_lengths.append(float(summary["session_length_min"]))
+        elif first_dt:
+            first_day_events = [
+                event for event in user_events if event["created_at"][:10] == user_events[0]["created_at"][:10]
+            ]
+            last_same_day = _parse_event_dt(first_day_events[-1]["created_at"])
+            if last_same_day:
+                session_lengths.append(round((last_same_day - first_dt).total_seconds() / 60, 2))
+
+        scenario_starts = [event for event in user_events if event["event_name"] == "quiz_started"]
+        result_events = [event for event in user_events if event["event_name"] == "results_viewed"]
+        completion_flags.append(1 if result_events else 0)
+        if summary and isinstance(summary.get("avg_scenarios"), (int, float)):
+            scenarios_per_user.append(float(summary["avg_scenarios"]))
+        else:
+            scenarios_per_user.append(float(len(scenario_starts)))
+        if summary and isinstance(summary.get("bot_requests_count"), (int, float)):
+            bot_requests.append(int(summary["bot_requests_count"]))
+        else:
+            bot_requests.append(sum(1 for event in user_events if event["event_name"] == "bot_started"))
+
+        user_ai_count = (
+            int(summary["ai_usage_count"])
+            if summary and isinstance(summary.get("ai_usage_count"), (int, float))
+            else sum(1 for event in user_events if is_ai_event(event))
+        )
+        ai_usage.append(user_ai_count)
+        ai_user_flags.append(1 if user_ai_count else 0)
+
+        for result in result_events:
+            if summary and isinstance(summary.get("time_to_result_min"), (int, float)):
+                continue
+            payload_time = result["payload"].get("time_to_result_min")
+            if isinstance(payload_time, (int, float)):
+                time_to_result.append(float(payload_time))
+                continue
+            result_dt = _parse_event_dt(result["created_at"])
+            previous_starts = [
+                _parse_event_dt(start["created_at"])
+                for start in scenario_starts
+                if start["created_at"] <= result["created_at"]
+            ]
+            previous_starts = [dt for dt in previous_starts if dt is not None]
+            if result_dt and previous_starts:
+                time_to_result.append(round((result_dt - previous_starts[-1]).total_seconds() / 60, 2))
+
+        if summary and isinstance(summary.get("time_to_result_min"), (int, float)):
+            time_to_result.append(float(summary["time_to_result_min"]))
+
+        if first_dt:
+            first_day = first_dt.date()
+            active_days = {
+                parsed.date()
+                for parsed in (_parse_event_dt(event["created_at"]) for event in user_events)
+                if parsed is not None
+            }
+            for day in retention_flags:
+                retention_flags[day].append(1 if first_day + timedelta(days=day) in active_days else 0)
+
+    return {
+        "source": "events",
+        "new_users": total_users,
+        "avg_time_to_result_min": _average(time_to_result),
+        "scenario_completion_rate": _average(completion_flags),
+        "avg_scenarios": _average(scenarios_per_user),
+        "retention_d1": _average(retention_flags[1]),
+        "retention_d7": _average(retention_flags[7]),
+        "retention_d30": _average(retention_flags[30]),
+        "ai_stylist_share": _average(ai_user_flags),
+        "avg_session_length_min": _average(session_lengths),
+        "avg_bot_requests": _average(bot_requests),
+        "ai_usage_frequency": _average(ai_usage),
+        "cac": round(marketing_spend / total_users, 2) if total_users and marketing_spend else 0,
+        "marketing_spend": marketing_spend,
+        "shared_outfits": counts["outfit_shared"],
+        "payment_conversion": round(counts["premium_interest"] / total_users, 2) if total_users else 0,
+    }
+
+
 def get_metrics() -> dict[str, Any]:
     events = get_all_events()
 
@@ -320,8 +564,13 @@ def get_metrics() -> dict[str, Any]:
     show_more = counts["show_more"]
     saved_rate = saved_total / results_viewed if results_viewed else 0
     repeat_users = sum(1 for days in daily_users.values() if len(days) >= 2)
+    ai_quota_rows = conn.execute(
+        "SELECT COUNT(*) AS users, COALESCE(SUM(used_count), 0) AS total_used FROM ai_quotas"
+    ).fetchone()
 
     metrics = {
+        "aarrr": _get_aarrr_metrics(),
+        "aarrr_events": _get_aarrr_event_metrics(events, total_users),
         "users": {
             "total_unique": total_users,
             "repeat_users_7d_proxy": repeat_users,
@@ -347,6 +596,9 @@ def get_metrics() -> dict[str, Any]:
             ) if counts["weather_auto_attempted"] else 0,
             "owned_item_usage_rate": round(counts["item_flow_started"] / quiz_started, 2) if quiz_started else 0,
             "outfit_check_usage_rate": round(counts["review_started"] / total_users, 2) if total_users else 0,
+            "ai_free_limit": settings.AI_FREE_LIMIT,
+            "ai_quota_users": ai_quota_rows["users"],
+            "ai_quota_used_total": ai_quota_rows["total_used"],
         },
         "quality": {
             "reference_click_rate": round(counts["reference_opened"] / results_viewed, 2) if results_viewed else 0,

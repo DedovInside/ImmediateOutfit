@@ -11,6 +11,12 @@
 - `Retention proxy`: вернулся и использовал бот повторно.
 - `Premium interest`: нажал early-access / оставил интерес.
 
+## CAC для защиты
+- В Excel используется `CAC = 2000 / 20 = 100 ₽`.
+- Это правдоподобно как пилотный CAC: условно 2000 ₽ на тестовое продвижение/посев и 20 новых пользователей.
+- Для боевого продукта эту цифру нельзя обещать как стабильную: после выхода за пределы друзей и учебных чатов CAC, скорее всего, вырастет.
+- На защите корректная формулировка: «пилотный CAC на тестовой выборке», а не «прогнозный CAC масштабирования».
+
 ## Упрощенная формула
 - `Expected revenue per activated user = premium_interest_rate * expected_conversion_to_paid * premium_price`
 - `Contribution margin = expected revenue - infra/support cost per active user`

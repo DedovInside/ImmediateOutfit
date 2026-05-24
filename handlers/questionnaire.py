@@ -2,6 +2,7 @@
 Хендлеры пошагового опроса и сценария "подбери под мою вещь".
 """
 from html import escape
+from datetime import UTC, datetime
 
 from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
@@ -16,6 +17,7 @@ from keyboards.inline import (
     gender_keyboard,
     mood_keyboard,
     occasion_keyboard,
+    premium_keyboard,
     priority_keyboard,
     style_keyboard,
     weather_keyboard,
@@ -87,7 +89,8 @@ async def _finalize_quiz(callback: CallbackQuery, state: FSMContext) -> None:
 @router.callback_query(F.data == "start_quiz")
 async def start_quiz(callback: CallbackQuery, state: FSMContext) -> None:
     await state.clear()
-    await state.update_data(flow_mode="standard", shown_ids=[], history=[])
+    started_at = datetime.now(UTC).isoformat()
+    await state.update_data(flow_mode="standard", shown_ids=[], history=[], quiz_started_at=started_at)
     storage.record_event(callback.from_user.id, "quiz_started", {"mode": "standard"})
     profile = storage.get_profile(callback.from_user.id)
     if profile and profile.gender:
@@ -102,7 +105,8 @@ async def start_quiz(callback: CallbackQuery, state: FSMContext) -> None:
 async def quick_start(callback: CallbackQuery, state: FSMContext) -> None:
     await state.clear()
     profile = storage.get_profile(callback.from_user.id)
-    await state.update_data(flow_mode="quick", shown_ids=[], history=[])
+    started_at = datetime.now(UTC).isoformat()
+    await state.update_data(flow_mode="quick", shown_ids=[], history=[], quiz_started_at=started_at)
     storage.record_event(callback.from_user.id, "quiz_started", {"mode": "quick"})
     if profile:
         await state.update_data(
@@ -139,14 +143,37 @@ async def process_item_anchor(message: Message, state: FSMContext) -> None:
     raw_item_anchor = (message.text or "").strip()
     profile = storage.get_profile(message.from_user.id)
 
+    if is_ai_enabled() and not storage.can_use_ai(message.from_user.id):
+        quota = storage.get_ai_quota(message.from_user.id)
+        storage.record_event(
+            message.from_user.id,
+            "ai_quota_limit_reached",
+            {"scenario": "item", "used": quota["used"], "limit": quota["limit"]},
+        )
+        await message.answer(
+            "AI-лимит бесплатных ответов закончился.\n\n"
+            "Базовый подбор по кнопкам остаётся доступен, а Premium будет нужен для увеличенных лимитов "
+            "и расширенных AI-функций.",
+            parse_mode="HTML",
+            reply_markup=premium_keyboard(),
+        )
+        await state.clear()
+        return
+
     suggestions = await ai_suggest_outfits_for_item(raw_item_anchor, profile) if is_ai_enabled() else None
     if suggestions:
+        quota = storage.consume_ai_quota(message.from_user.id, "item")
         storage.record_event(
             message.from_user.id,
             "ai_item_outfits_generated",
-            {"count": len(suggestions), "query": raw_item_anchor[:120]},
+            {
+                "count": len(suggestions),
+                "query": raw_item_anchor[:120],
+                "quota_used": quota["used"],
+                "quota_limit": quota["limit"],
+            },
         )
-        await _send_ai_item_suggestions(message, raw_item_anchor, suggestions)
+        await _send_ai_item_suggestions(message, raw_item_anchor, suggestions, quota)
         await state.clear()
         return
 
@@ -202,6 +229,7 @@ async def _send_ai_item_suggestions(
     message: Message,
     query: str,
     suggestions: list[ItemOutfitSuggestion],
+    quota: dict[str, int] | None = None,
 ) -> None:
     await message.answer(
         f"Собрал варианты вокруг запроса:\n<i>{escape(query[:300])}</i>",
@@ -212,8 +240,12 @@ async def _send_ai_item_suggestions(
             _format_ai_suggestion(suggestion, index),
             parse_mode="HTML",
         )
+    quota_line = ""
+    if quota:
+        quota_line = f"\n\nAI-лимит: {quota['used']}/{quota['limit']} ответов использовано."
     await message.answer(
-        "Если хочешь точнее, запусти «Под мою вещь» ещё раз и добавь ситуацию, погоду или желаемый вайб.",
+        "Если хочешь точнее, запусти «Под мою вещь» ещё раз и добавь ситуацию, погоду или желаемый вайб."
+        + quota_line,
         reply_markup=final_keyboard(),
         parse_mode="HTML",
     )

@@ -14,7 +14,12 @@ class Settings(BaseSettings):
     DEEPSEEK_BASE_URL: str = "https://api.deepseek.com"
     DEEPSEEK_MODEL: str = "deepseek-v4-flash"
     DEEPSEEK_TIMEOUT_SECONDS: int = 15
+    AI_FREE_LIMIT: int = 5
     DB_PATH: str = str(Path(__file__).resolve().parent / "data" / "immediateoutfit.db")
+    DEMO_SEED_ON_START: bool = False
+    DEMO_XLSX_PATH: str = str(
+        Path(r"C:\Users\johnn\Downloads\Telegram Desktop\ImmediateOutfit_AARRR_dataset.xlsx")
+    )
 
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
 

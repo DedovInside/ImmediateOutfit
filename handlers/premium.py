@@ -12,12 +12,14 @@ router = Router()
 
 PREMIUM_TEXT = (
     "✨ <b>ImmediateOutfit Premium</b>\n\n"
-    "Что хотим валидировать как premium:\n"
+    "Сейчас в бесплатном режиме доступно несколько AI-ответов, чтобы попробовать сценарии "
+    "«Под мою вещь» и «Проверить мой образ».\n\n"
+    "Premium будет нужен для увеличенных лимитов AI-стилиста и будущих расширенных функций:\n"
     "- недельные подборки образов\n"
     "- расширенный профиль и более точный подбор\n"
     "- разбор гардероба и персональные рекомендации\n"
     "- photo-review образа как experimental-функция\n\n"
-    "Сейчас это ещё не боевой платежный контур, а продуктовый тест на интерес."
+    "Платёжный контур планируем через Telegram Stars. Сейчас можно оставить интерес к early access."
 )
 
 
@@ -33,4 +35,9 @@ async def premium_info(callback: CallbackQuery) -> None:
 async def premium_interest(callback: CallbackQuery) -> None:
     storage.record_event(callback.from_user.id, "premium_interest")
     await clear_clicked_keyboard(callback)
-    await callback.answer("Супер, записал твой интерес к premium.", show_alert=True)
+    await callback.message.answer(  # type: ignore[union-attr]
+        "Готово, записал интерес к Premium ✨\n\n"
+        "Когда откроем расширенные AI-лимиты и новые функции, это будет первым сигналом для запуска.",
+        parse_mode="HTML",
+    )
+    await callback.answer("Интерес к Premium записан.", show_alert=True)

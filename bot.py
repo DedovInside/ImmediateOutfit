@@ -5,6 +5,7 @@ OutfitNow - Telegram-бот для подбора образа.
 import asyncio
 import logging
 import sys
+from pathlib import Path
 
 from aiogram import Bot, Dispatcher
 from aiogram.fsm.storage.memory import MemoryStorage
@@ -36,6 +37,11 @@ async def main() -> None:
     )
     dp = Dispatcher(storage=MemoryStorage())
     storage.init_db()
+    if settings.DEMO_SEED_ON_START:
+        from scripts.seed_demo_data import seed_from_xlsx
+
+        seed_from_xlsx(Path(settings.DEMO_XLSX_PATH))
+        logging.info("📊 Demo AARRR dataset загружен в SQLite")
 
     # Регистрация роутеров
     dp.include_router(start.router)
