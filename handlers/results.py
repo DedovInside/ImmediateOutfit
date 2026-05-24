@@ -8,6 +8,7 @@ from html import escape
 from typing import Union
 
 from aiogram import F, Router
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, FSInputFile, InputMediaPhoto, Message
@@ -19,7 +20,6 @@ from keyboards.inline import (
     premium_keyboard,
     result_feedback_keyboard,
     review_feedback_keyboard,
-    start_keyboard,
     cancel_keyboard,
 )
 from models.states import OutfitForm
@@ -28,7 +28,7 @@ from services.ai_assistant import ai_review_outfit, is_ai_enabled
 from services.catalog import find_outfit, get_outfits
 from services.references import get_reference_images
 from services.recommender import Recommendation, recommend, review_user_outfit
-from handlers.ui import clear_clicked_keyboard
+from handlers.ui import cleanup_tracked_messages, clear_clicked_keyboard, send_tracked_message, track_message
 
 router = Router()
 OUTFITS = get_outfits()
@@ -119,6 +119,31 @@ def _format_outfit(recommendation: Recommendation, idx: int) -> str:
     )
 
 
+async def _send_bottom_menu(message: Message, state: FSMContext, user_id: int, text: str | None = None) -> None:
+    """Держит главное меню последним сообщением, а старую клавиатуру аккуратно гасит."""
+    data = await state.get_data()
+    chat_id = data.get("final_menu_chat_id")
+    message_id = data.get("final_menu_message_id")
+    if chat_id and message_id:
+        try:
+            await message.bot.edit_message_reply_markup(
+                chat_id=chat_id,
+                message_id=message_id,
+                reply_markup=None,
+            )
+        except TelegramBadRequest:
+            pass
+
+    sent = await send_tracked_message(
+        message,
+        user_id,
+        text or "Что дальше?",
+        reply_markup=final_keyboard(),
+        parse_mode="HTML",
+    )
+    await state.update_data(final_menu_chat_id=sent.chat.id, final_menu_message_id=sent.message_id)
+
+
 async def show_results(message: Union[Message, CallbackQuery], state: FSMContext, user_id: int) -> None:
     data = await state.get_data()
     answers = {
@@ -169,7 +194,9 @@ async def show_results(message: Union[Message, CallbackQuery], state: FSMContext
     )
 
     for idx, recommendation in enumerate(results, start=1):
-        await target.answer(  # type: ignore[union-attr]
+        await send_tracked_message(  # type: ignore[arg-type]
+            target,
+            user_id,
             _format_outfit(recommendation, idx),
             reply_markup=outfit_result_keyboard(
                 recommendation.outfit.id,
@@ -178,15 +205,18 @@ async def show_results(message: Union[Message, CallbackQuery], state: FSMContext
             parse_mode="HTML",
         )
 
-    await target.answer(  # type: ignore[union-attr]
+    await send_tracked_message(  # type: ignore[arg-type]
+        target,
+        user_id,
         "Если сомневаешься, сначала бери тот вариант, который проще реализовать из твоего шкафа.",
         reply_markup=result_feedback_keyboard(),
         parse_mode="HTML",
     )
-    await target.answer(  # type: ignore[union-attr]
-        "Можем продолжить: показать ещё, собрать под твою вещь или сохранить удачные варианты.",
-        reply_markup=final_keyboard(),
-        parse_mode="HTML",
+    await _send_bottom_menu(
+        target,  # type: ignore[arg-type]
+        state,
+        user_id,
+        "Можем продолжить: показать ещё, собрать под твою вещь, проверить образ или открыть сохранённые.",
     )
 
 
@@ -205,8 +235,10 @@ async def on_save(callback: CallbackQuery, state: FSMContext) -> None:
     outfit = find_outfit(outfit_id)
     if outfit and storage.save_outfit(callback.from_user.id, outfit):
         await callback.answer("✅ Образ сохранён!", show_alert=True)
+        await _send_bottom_menu(callback.message, state, callback.from_user.id, "Сохранил образ. Что делаем дальше?")  # type: ignore[arg-type]
     elif outfit:
         await callback.answer("Этот образ уже сохранён 😉", show_alert=True)
+        await _send_bottom_menu(callback.message, state, callback.from_user.id, "Этот образ уже в сохранённых. Что дальше?")  # type: ignore[arg-type]
     else:
         await callback.answer("Не удалось найти образ", show_alert=True)
 
@@ -222,12 +254,13 @@ async def on_explain(callback: CallbackQuery, state: FSMContext) -> None:
         text += "\n".join(f"• {reason}" for reason in reasons)
     else:
         text += "• Он близок к твоим ответам по стилю, формату дня и уровню комфорта."
-    await callback.message.answer(text, parse_mode="HTML")  # type: ignore[union-attr]
+    await send_tracked_message(callback.message, callback.from_user.id, text, parse_mode="HTML")  # type: ignore[arg-type]
+    await _send_bottom_menu(callback.message, state, callback.from_user.id)  # type: ignore[arg-type]
     await callback.answer()
 
 
 @router.callback_query(F.data.startswith("reference:"))
-async def on_reference(callback: CallbackQuery) -> None:
+async def on_reference(callback: CallbackQuery, state: FSMContext) -> None:
     outfit_id = callback.data.split(":")[1]  # type: ignore[union-attr]
     outfit = find_outfit(outfit_id)
     storage.record_event(callback.from_user.id, "reference_opened", {"outfit_id": outfit_id})
@@ -238,27 +271,33 @@ async def on_reference(callback: CallbackQuery) -> None:
         )
         if outfit.reference.image_url:
             text += f"\n\nСсылка на референс: {outfit.reference.image_url}"
-        await callback.message.answer(text, parse_mode="HTML")  # type: ignore[union-attr]
+        await send_tracked_message(callback.message, callback.from_user.id, text, parse_mode="HTML")  # type: ignore[arg-type]
         images = get_reference_images(outfit)
         if images:
             if len(images) == 1:
-                await callback.message.answer_photo(  # type: ignore[union-attr]
+                sent = await callback.message.answer_photo(  # type: ignore[union-attr]
                     FSInputFile(images[0]),
                     caption="Визуальный референс образа",
                 )
+                await track_message(callback.from_user.id, sent)
             else:
                 media = [InputMediaPhoto(media=FSInputFile(path)) for path in images]
-                await callback.message.answer_media_group(media=media)  # type: ignore[union-attr]
+                sent_group = await callback.message.answer_media_group(media=media)  # type: ignore[union-attr]
+                for sent in sent_group:
+                    await track_message(callback.from_user.id, sent)
     else:
-        await callback.message.answer(  # type: ignore[union-attr]
+        await send_tracked_message(  # type: ignore[arg-type]
+            callback.message,
+            callback.from_user.id,
             "Для этого образа пока нет отдельного визуального референса, но каркас образа уже можно собрать по списку вещей.",
             parse_mode="HTML",
         )
+    await _send_bottom_menu(callback.message, state, callback.from_user.id)  # type: ignore[arg-type]
     await callback.answer()
 
 
 @router.callback_query(F.data.startswith("links:"))
-async def on_links(callback: CallbackQuery) -> None:
+async def on_links(callback: CallbackQuery, state: FSMContext) -> None:
     outfit_id = callback.data.split(":")[1]  # type: ignore[union-attr]
     outfit = find_outfit(outfit_id)
     storage.record_event(callback.from_user.id, "links_opened", {"outfit_id": outfit_id})
@@ -268,24 +307,36 @@ async def on_links(callback: CallbackQuery) -> None:
             for link in outfit.purchase_links
             if _is_real_purchase_link(link)
         ]
-        await callback.message.answer(  # type: ignore[union-attr]
+        await send_tracked_message(  # type: ignore[arg-type]
+            callback.message,
+            callback.from_user.id,
             "🛍 <b>Где искать вещи из образа:</b>\n\n" + "\n".join(lines),
             parse_mode="HTML",
         )
     else:
-        await callback.message.answer(  # type: ignore[union-attr]
+        await send_tracked_message(  # type: ignore[arg-type]
+            callback.message,
+            callback.from_user.id,
             "Для этого варианта команда пока не добавила готовые ссылки. Ориентируйся на тип вещи и собери аналог из того, что уже есть в гардеробе.",
             parse_mode="HTML",
         )
+    await _send_bottom_menu(callback.message, state, callback.from_user.id)  # type: ignore[arg-type]
     await callback.answer()
 
 
 @router.callback_query(F.data == "show_saved")
-async def on_show_saved(callback: CallbackQuery) -> None:
+async def on_show_saved(callback: CallbackQuery, state: FSMContext) -> None:
     await clear_clicked_keyboard(callback)
     saved = storage.get_saved(callback.from_user.id)
     if not saved:
-        await callback.answer("У тебя пока нет сохранённых образов 🤷", show_alert=True)
+        await send_tracked_message(  # type: ignore[arg-type]
+            callback.message,
+            callback.from_user.id,
+            "У тебя пока нет сохранённых образов. Можно сначала подобрать образ и нажать «Сохранить».",
+            parse_mode="HTML",
+        )
+        await _send_bottom_menu(callback.message, state, callback.from_user.id)  # type: ignore[arg-type]
+        await callback.answer()
         return
 
     lines = []
@@ -293,20 +344,26 @@ async def on_show_saved(callback: CallbackQuery) -> None:
         items_str = ", ".join(outfit.items.values())
         lines.append(f"<b>{index}. {outfit.name}</b>\n   {items_str}")
 
-    await callback.message.answer(  # type: ignore[union-attr]
+    await send_tracked_message(  # type: ignore[arg-type]
+        callback.message,
+        callback.from_user.id,
         "📂 <b>Твои сохранённые образы:</b>\n\n" + "\n\n".join(lines),
         parse_mode="HTML",
-        reply_markup=start_keyboard(has_profile=storage.get_profile(callback.from_user.id) is not None),
     )
+    await _send_bottom_menu(callback.message, state, callback.from_user.id)  # type: ignore[arg-type]
     await callback.answer()
 
 
 @router.callback_query(F.data == "check_outfit")
 async def on_check_outfit(callback: CallbackQuery, state: FSMContext) -> None:
+    await cleanup_tracked_messages(callback)
+    await clear_clicked_keyboard(callback)
+    await state.clear()
     await state.set_state(OutfitForm.check_outfit)
     storage.record_event(callback.from_user.id, "review_started")
-    await clear_clicked_keyboard(callback)
-    await callback.message.answer(  # type: ignore[union-attr]
+    await send_tracked_message(  # type: ignore[arg-type]
+        callback.message,
+        callback.from_user.id,
         "🔍 <b>Проверка образа</b>\n\n"
         "Опиши, что ты планируешь надеть, а я скажу:\n"
         "- что уже хорошо\n"
@@ -330,7 +387,7 @@ async def process_check_outfit(message: Message, state: FSMContext) -> None:
             f"<b>Что не хватает:</b>\n" + "\n".join(f"• {item}" for item in fallback_review.concerns) + "\n\n"
             f"<b>Как описать:</b>\n" + "\n".join(f"• {item}" for item in fallback_review.suggestions)
         )
-        await message.answer(text, parse_mode="HTML", reply_markup=cancel_keyboard())
+        await send_tracked_message(message, message.from_user.id, text, parse_mode="HTML", reply_markup=cancel_keyboard())
         return
 
     profile = storage.get_profile(message.from_user.id)
@@ -341,7 +398,9 @@ async def process_check_outfit(message: Message, state: FSMContext) -> None:
             "ai_quota_limit_reached",
             {"scenario": "review", "used": quota["used"], "limit": quota["limit"]},
         )
-        await message.answer(
+        await send_tracked_message(
+            message,
+            message.from_user.id,
             "AI-лимит бесплатных ответов закончился.\n\n"
             "Premium будет нужен для увеличенных лимитов AI-разбора, недельных подборок и будущего photo-review.",
             parse_mode="HTML",
@@ -369,8 +428,10 @@ async def process_check_outfit(message: Message, state: FSMContext) -> None:
         f"<b>Что спорно:</b>\n" + "\n".join(f"• {item}" for item in review.concerns) + "\n\n"
         f"<b>Как усилить:</b>\n" + "\n".join(f"• {item}" for item in review.suggestions)
     )
-    await message.answer(text, parse_mode="HTML", reply_markup=review_feedback_keyboard())
-    await message.answer(
+    await send_tracked_message(message, message.from_user.id, text, parse_mode="HTML", reply_markup=review_feedback_keyboard())
+    await send_tracked_message(
+        message,
+        message.from_user.id,
         "Если хочешь, после этого могу сразу собрать для тебя альтернативный образ под ту же ситуацию."
         + (f"\n\nAI-лимит: {quota['used']}/{quota['limit']} ответов использовано." if quota else ""),
         reply_markup=final_keyboard(),
@@ -391,7 +452,7 @@ async def _maybe_request_feedback_comment(
         "Спасибо! Если коротко — <b>что не зашло?</b>\n"
         "Можно одной фразой. Или нажми «Пропустить» / отправь /skip."
     )
-    await callback.message.answer(prompt, parse_mode="HTML", reply_markup=feedback_skip_keyboard())  # type: ignore[union-attr]
+    await send_tracked_message(callback.message, callback.from_user.id, prompt, parse_mode="HTML", reply_markup=feedback_skip_keyboard())  # type: ignore[arg-type]
 
 
 @router.callback_query(F.data.startswith("result_feedback:"))
@@ -415,7 +476,7 @@ async def review_feedback(callback: CallbackQuery, state: FSMContext) -> None:
 @router.message(OutfitForm.feedback_comment, Command("skip"))
 async def feedback_comment_skip_cmd(message: Message, state: FSMContext) -> None:
     await state.clear()
-    await message.answer("Окей, пропустил 👍")
+    await send_tracked_message(message, message.from_user.id, "Окей, пропустил 👍")
 
 
 @router.callback_query(OutfitForm.feedback_comment, F.data == "feedback_comment_skip")
@@ -432,9 +493,9 @@ async def feedback_comment_text(message: Message, state: FSMContext) -> None:
     score = data.get("feedback_score")
     text = (message.text or "").strip()[:500]
     if not text:
-        await message.answer("Кажется, ничего не отправилось. Попробуй ещё раз или нажми /skip.")
+        await send_tracked_message(message, message.from_user.id, "Кажется, ничего не отправилось. Попробуй ещё раз или нажми /skip.")
         return
     event_name = f"{kind}_feedback_comment"
     storage.record_event(message.from_user.id, event_name, {"score": score, "text": text})
     await state.clear()
-    await message.answer(f"🙏 Спасибо за комментарий: <i>«{escape(text)}»</i>", parse_mode="HTML")
+    await send_tracked_message(message, message.from_user.id, f"🙏 Спасибо за комментарий: <i>«{escape(text)}»</i>", parse_mode="HTML")

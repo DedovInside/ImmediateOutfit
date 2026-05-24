@@ -123,6 +123,14 @@ def init_db() -> None:
             limit_count INTEGER NOT NULL,
             updated_at TEXT NOT NULL
         );
+
+        CREATE TABLE IF NOT EXISTS bot_messages (
+            user_id INTEGER NOT NULL,
+            chat_id INTEGER NOT NULL,
+            message_id INTEGER NOT NULL,
+            created_at TEXT NOT NULL,
+            PRIMARY KEY (chat_id, message_id)
+        );
         """
     )
     conn.commit()
@@ -166,6 +174,37 @@ def record_event(user_id: int | None, event_name: str, payload: dict[str, Any] |
             "UPDATE users SET last_seen_at = ? WHERE user_id = ?",
             (now, user_id),
         )
+    conn.commit()
+
+
+def track_bot_message(user_id: int, chat_id: int, message_id: int) -> None:
+    conn = _get_conn()
+    conn.execute(
+        """
+        INSERT OR IGNORE INTO bot_messages (user_id, chat_id, message_id, created_at)
+        VALUES (?, ?, ?, ?)
+        """,
+        (user_id, chat_id, message_id, _utcnow()),
+    )
+    conn.commit()
+
+
+def get_tracked_bot_messages(user_id: int) -> list[dict[str, int]]:
+    rows = _get_conn().execute(
+        """
+        SELECT chat_id, message_id
+        FROM bot_messages
+        WHERE user_id = ?
+        ORDER BY created_at DESC
+        """,
+        (user_id,),
+    ).fetchall()
+    return [{"chat_id": int(row["chat_id"]), "message_id": int(row["message_id"])} for row in rows]
+
+
+def clear_tracked_bot_messages(user_id: int) -> None:
+    conn = _get_conn()
+    conn.execute("DELETE FROM bot_messages WHERE user_id = ?", (user_id,))
     conn.commit()
 
 

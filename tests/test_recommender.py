@@ -73,7 +73,7 @@ class RecommenderTests(unittest.TestCase):
     def test_catalog_includes_team_curated_outfits(self) -> None:
         outfits = get_outfits()
         team_outfits = [outfit for outfit in outfits if outfit.source == "team_curated_txt"]
-        self.assertGreaterEqual(len(team_outfits), 80)
+        self.assertEqual(len(team_outfits), 79)
         self.assertTrue(any(outfit.palette for outfit in team_outfits))
         self.assertTrue(any(outfit.purchase_links for outfit in team_outfits))
 

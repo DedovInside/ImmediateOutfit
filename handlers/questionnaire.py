@@ -26,7 +26,7 @@ from models.states import OutfitForm
 from services import storage
 from services.ai_assistant import ItemOutfitSuggestion, ai_suggest_outfits_for_item, is_ai_enabled
 from services.weather import fetch_weather
-from handlers.ui import clear_clicked_keyboard
+from handlers.ui import cleanup_tracked_messages, clear_clicked_keyboard, send_tracked_message, track_message
 
 router = Router()
 
@@ -60,11 +60,12 @@ async def _show_step(callback: CallbackQuery, state: FSMContext, step: str, adva
     await state.update_data(history=history)
     await state.set_state(STATE_BY_STEP[step])
     text, kb_fn = STEP_VIEW[step]
-    await callback.message.edit_text(  # type: ignore[union-attr]
+    edited = await callback.message.edit_text(  # type: ignore[union-attr]
         text,
         reply_markup=kb_fn(back=bool(history)),
         parse_mode="HTML",
     )
+    await track_message(callback.from_user.id, edited)
 
 
 async def _goto_occasion(callback: CallbackQuery, state: FSMContext) -> None:
@@ -74,11 +75,12 @@ async def _goto_occasion(callback: CallbackQuery, state: FSMContext) -> None:
 async def _finalize_quiz(callback: CallbackQuery, state: FSMContext) -> None:
     storage.record_event(callback.from_user.id, "quiz_completed")
     await state.set_state(OutfitForm.result)
-    await callback.message.edit_text(  # type: ignore[union-attr]
+    edited = await callback.message.edit_text(  # type: ignore[union-attr]
         "Отлично, понял тебя 👌\n\n"
         "Собираю варианты под твой день, погоду и текущий запрос...",
         parse_mode="HTML",
     )
+    await track_message(callback.from_user.id, edited)
     await callback.answer()
 
     from handlers.results import show_results
@@ -88,6 +90,8 @@ async def _finalize_quiz(callback: CallbackQuery, state: FSMContext) -> None:
 
 @router.callback_query(F.data == "start_quiz")
 async def start_quiz(callback: CallbackQuery, state: FSMContext) -> None:
+    await cleanup_tracked_messages(callback)
+    await clear_clicked_keyboard(callback)
     await state.clear()
     started_at = datetime.now(UTC).isoformat()
     await state.update_data(flow_mode="standard", shown_ids=[], history=[], quiz_started_at=started_at)
@@ -103,6 +107,8 @@ async def start_quiz(callback: CallbackQuery, state: FSMContext) -> None:
 
 @router.callback_query(F.data == "quick_start")
 async def quick_start(callback: CallbackQuery, state: FSMContext) -> None:
+    await cleanup_tracked_messages(callback)
+    await clear_clicked_keyboard(callback)
     await state.clear()
     profile = storage.get_profile(callback.from_user.id)
     started_at = datetime.now(UTC).isoformat()
@@ -124,12 +130,15 @@ async def quick_start(callback: CallbackQuery, state: FSMContext) -> None:
 
 @router.callback_query(F.data == "item_flow_start")
 async def item_flow_start(callback: CallbackQuery, state: FSMContext) -> None:
+    await cleanup_tracked_messages(callback)
+    await clear_clicked_keyboard(callback)
     await state.clear()
     await state.update_data(flow_mode="item", shown_ids=[], history=[])
     storage.record_event(callback.from_user.id, "item_flow_started")
     await state.set_state(OutfitForm.item_anchor)
-    await clear_clicked_keyboard(callback)
-    await callback.message.answer(  # type: ignore[union-attr]
+    await send_tracked_message(  # type: ignore[arg-type]
+        callback.message,
+        callback.from_user.id,
         "👚 <b>Напиши вещь, вокруг которой хочешь собрать образ.</b>\n\n"
         "Например: <i>белая рубашка, черные брюки, голубые джинсы, кроссовки</i>",
         parse_mode="HTML",
@@ -150,7 +159,9 @@ async def process_item_anchor(message: Message, state: FSMContext) -> None:
             "ai_quota_limit_reached",
             {"scenario": "item", "used": quota["used"], "limit": quota["limit"]},
         )
-        await message.answer(
+        await send_tracked_message(
+            message,
+            message.from_user.id,
             "AI-лимит бесплатных ответов закончился.\n\n"
             "Базовый подбор по кнопкам остаётся доступен, а Premium будет нужен для увеличенных лимитов "
             "и расширенных AI-функций.",
@@ -184,21 +195,27 @@ async def process_item_anchor(message: Message, state: FSMContext) -> None:
     )
     await state.update_data(item_anchor=raw_item_anchor, item_anchor_raw=raw_item_anchor)
     if is_ai_enabled():
-        await message.answer(
+        await send_tracked_message(
+            message,
+            message.from_user.id,
             "AI сейчас не смог собрать варианты, поэтому продолжу через быстрые кнопки.",
             parse_mode="HTML",
         )
     if profile and profile.gender:
         await state.update_data(gender=profile.gender, budget=profile.budget, style=profile.style)
         await state.set_state(OutfitForm.occasion)
-        await message.answer(
+        await send_tracked_message(
+            message,
+            message.from_user.id,
             "📍 <b>Окей, теперь под какую ситуацию собираем образ?</b>",
             reply_markup=occasion_keyboard(),
             parse_mode="HTML",
         )
     else:
         await state.set_state(OutfitForm.gender)
-        await message.answer(
+        await send_tracked_message(
+            message,
+            message.from_user.id,
             "👤 <b>Для кого подбираем образ?</b>",
             reply_markup=gender_keyboard(),
             parse_mode="HTML",
@@ -231,19 +248,25 @@ async def _send_ai_item_suggestions(
     suggestions: list[ItemOutfitSuggestion],
     quota: dict[str, int] | None = None,
 ) -> None:
-    await message.answer(
+    await send_tracked_message(
+        message,
+        message.from_user.id,
         f"Собрал варианты вокруг запроса:\n<i>{escape(query[:300])}</i>",
         parse_mode="HTML",
     )
     for index, suggestion in enumerate(suggestions, start=1):
-        await message.answer(
+        await send_tracked_message(
+            message,
+            message.from_user.id,
             _format_ai_suggestion(suggestion, index),
             parse_mode="HTML",
         )
     quota_line = ""
     if quota:
         quota_line = f"\n\nAI-лимит: {quota['used']}/{quota['limit']} ответов использовано."
-    await message.answer(
+    await send_tracked_message(
+        message,
+        message.from_user.id,
         "Если хочешь точнее, запусти «Под мою вещь» ещё раз и добавь ситуацию, погоду или желаемый вайб."
         + quota_line,
         reply_markup=final_keyboard(),
@@ -284,7 +307,9 @@ async def process_weather(callback: CallbackQuery, state: FSMContext) -> None:
 
 @router.message(OutfitForm.weather)
 async def process_weather_free_text(message: Message) -> None:
-    await message.answer(
+    await send_tracked_message(
+        message,
+        message.from_user.id,
         "На этом шаге я жду кнопку с погодой 🙂\n\n"
         "Выбери один из вариантов ниже или нажми «📍 По моему городу», чтобы я снова попросил город.",
         reply_markup=weather_keyboard(back=False),
@@ -302,7 +327,9 @@ async def process_weather_auto(callback: CallbackQuery, state: FSMContext) -> No
         )
         return
     await state.set_state(OutfitForm.weather_city)
-    await callback.message.answer(  # type: ignore[union-attr]
+    await send_tracked_message(  # type: ignore[arg-type]
+        callback.message,
+        callback.from_user.id,
         "📍 <b>Напиши город или индекс</b> (например: Москва, Санкт-Петербург, 123056).\n\n"
         "Если передумал — /skip и вернёмся к ручному выбору.",
         parse_mode="HTML",
@@ -314,7 +341,9 @@ async def process_weather_auto(callback: CallbackQuery, state: FSMContext) -> No
 @router.message(OutfitForm.weather_city, F.text == "/skip")
 async def cancel_weather_auto(message: Message, state: FSMContext) -> None:
     await state.set_state(OutfitForm.weather)
-    await message.answer(
+    await send_tracked_message(
+        message,
+        message.from_user.id,
         "Окей, выбери погоду вручную:",
         reply_markup=weather_keyboard(back=False),
         parse_mode="HTML",
@@ -325,14 +354,16 @@ async def cancel_weather_auto(message: Message, state: FSMContext) -> None:
 async def process_weather_city(message: Message, state: FSMContext) -> None:
     city = (message.text or "").strip()[:60]
     if not city:
-        await message.answer("Кажется, ничего не пришло. Напиши город или /skip для ручного выбора.")
+        await send_tracked_message(message, message.from_user.id, "Кажется, ничего не пришло. Напиши город или /skip для ручного выбора.")
         return
 
     snapshot = await fetch_weather(city, settings.OWM_API_KEY)
     if snapshot is None:
         storage.record_event(message.from_user.id, "weather_auto_failed", {"city": city})
         await state.set_state(OutfitForm.weather)
-        await message.answer(
+        await send_tracked_message(
+            message,
+            message.from_user.id,
             "Не удалось получить погоду по этому городу 😔 Выбери вручную:",
             reply_markup=weather_keyboard(back=False),
             parse_mode="HTML",
@@ -350,7 +381,9 @@ async def process_weather_city(message: Message, state: FSMContext) -> None:
 
     bucket_titles = {"warm": "тёплая", "mild": "переменчивая", "cold": "холодная", "rain": "дождливая"}
     bucket_label = bucket_titles.get(snapshot.bucket, snapshot.bucket)
-    await message.answer(
+    await send_tracked_message(
+        message,
+        message.from_user.id,
         f"📍 <b>{snapshot.city}</b>: {snapshot.temp:+.0f}°, {snapshot.condition} → собираю на «{bucket_label}» погоду.",
         parse_mode="HTML",
     )
@@ -360,7 +393,9 @@ async def process_weather_city(message: Message, state: FSMContext) -> None:
     history.append("weather")
     await state.update_data(history=history)
     await state.set_state(OutfitForm.activity)
-    await message.answer(
+    await send_tracked_message(
+        message,
+        message.from_user.id,
         "🗓 <b>Насколько насыщенный у тебя день?</b>",
         reply_markup=activity_keyboard(back=True),
         parse_mode="HTML",
@@ -423,11 +458,12 @@ async def on_back(callback: CallbackQuery, state: FSMContext) -> None:
     await state.update_data(history=history)
     await state.set_state(STATE_BY_STEP[prev_step])
     text, kb_fn = STEP_VIEW[prev_step]
-    await callback.message.edit_text(  # type: ignore[union-attr]
+    edited = await callback.message.edit_text(  # type: ignore[union-attr]
         text,
         reply_markup=kb_fn(back=bool(history)),
         parse_mode="HTML",
     )
+    await track_message(callback.from_user.id, edited)
     await callback.answer()
 
 

@@ -28,7 +28,7 @@
 - [keyboards/inline.py](keyboards/inline.py) — inline-клавиатуры.
 - [data/outfits.json](data/outfits.json) — 40 базовых образов.
 - [data/curation.json](data/curation.json) — curated overlay по базовым образам.
-- [data/team_outfits.json](data/team_outfits.json) — 82 командные подборки из интервью/ручной стилизации с палитрами и артикулами.
+- [data/team_outfits.json](data/team_outfits.json) — 79 командных подборок из интервью/ручной стилизации с палитрами и артикулами.
 - [ГОТОВЫЕ ОБРАЗЫ С КАРТИНКАМИ.txt](ГОТОВЫЕ%20ОБРАЗЫ%20С%20КАРТИНКАМИ.txt) — исходный текстовый артефакт команды, из которого собран `team_outfits.json`.
 - [docs/](docs/) — `metrics.md`, `sprint_map.md`, `roadmap.md`, `unit_economics.md` (учебные артефакты, отдаются через `/artifacts/{name}`).
 

@@ -12,7 +12,7 @@ from aiogram.types import CallbackQuery, Message
 from keyboards.inline import cancel_keyboard, profile_keyboard
 from models.states import OutfitForm
 from services import storage
-from handlers.ui import clear_clicked_keyboard
+from handlers.ui import cleanup_tracked_messages, clear_clicked_keyboard, send_tracked_message
 
 router = Router()
 
@@ -58,11 +58,15 @@ def _format_profile(user_id: int) -> str:
 
 
 @router.callback_query(F.data == "profile_view")
-async def profile_view(callback: CallbackQuery) -> None:
+async def profile_view(callback: CallbackQuery, state: FSMContext) -> None:
+    await cleanup_tracked_messages(callback)
+    await state.clear()
     storage.record_event(callback.from_user.id, "profile_viewed")
     has_profile = storage.get_profile(callback.from_user.id) is not None
     await clear_clicked_keyboard(callback)
-    await callback.message.answer(  # type: ignore[union-attr]
+    await send_tracked_message(  # type: ignore[arg-type]
+        callback.message,
+        callback.from_user.id,
         _format_profile(callback.from_user.id),
         parse_mode="HTML",
         reply_markup=profile_keyboard(has_profile=has_profile),
@@ -74,7 +78,9 @@ async def profile_view(callback: CallbackQuery) -> None:
 async def profile_colors(callback: CallbackQuery, state: FSMContext) -> None:
     await state.set_state(OutfitForm.profile_colors)
     await clear_clicked_keyboard(callback)
-    await callback.message.answer(  # type: ignore[union-attr]
+    await send_tracked_message(  # type: ignore[arg-type]
+        callback.message,
+        callback.from_user.id,
         "🎨 <b>Напиши любимые цвета через запятую.</b>\n\n"
         "Например: <i>черный, белый, серый, бежевый</i>",
         parse_mode="HTML",
@@ -87,7 +93,9 @@ async def profile_colors(callback: CallbackQuery, state: FSMContext) -> None:
 async def save_profile_colors(message: Message, state: FSMContext) -> None:
     colors = [item.strip() for item in (message.text or "").split(",") if item.strip()]
     storage.upsert_profile(message.from_user.id, preferred_colors=colors)
-    await message.answer(
+    await send_tracked_message(
+        message,
+        message.from_user.id,
         "Сохранил цвета. Теперь бот сможет учитывать их при подборе.",
         parse_mode="HTML",
         reply_markup=profile_keyboard(has_profile=True),
@@ -99,7 +107,9 @@ async def save_profile_colors(message: Message, state: FSMContext) -> None:
 async def profile_disliked(callback: CallbackQuery, state: FSMContext) -> None:
     await state.set_state(OutfitForm.profile_disliked)
     await clear_clicked_keyboard(callback)
-    await callback.message.answer(  # type: ignore[union-attr]
+    await send_tracked_message(  # type: ignore[arg-type]
+        callback.message,
+        callback.from_user.id,
         "🚫 <b>Напиши вещи или типы вещей, которые не любишь носить.</b>\n\n"
         "Например: <i>каблуки, оверсайз худи, короткие юбки</i>",
         parse_mode="HTML",
@@ -112,7 +122,9 @@ async def profile_disliked(callback: CallbackQuery, state: FSMContext) -> None:
 async def save_profile_disliked(message: Message, state: FSMContext) -> None:
     disliked = [item.strip() for item in (message.text or "").split(",") if item.strip()]
     storage.upsert_profile(message.from_user.id, disliked_items=disliked)
-    await message.answer(
+    await send_tracked_message(
+        message,
+        message.from_user.id,
         "Запомнил анти-предпочтения.",
         parse_mode="HTML",
         reply_markup=profile_keyboard(has_profile=True),
@@ -124,7 +136,9 @@ async def save_profile_disliked(message: Message, state: FSMContext) -> None:
 async def profile_key_items(callback: CallbackQuery, state: FSMContext) -> None:
     await state.set_state(OutfitForm.profile_key_items)
     await clear_clicked_keyboard(callback)
-    await callback.message.answer(  # type: ignore[union-attr]
+    await send_tracked_message(  # type: ignore[arg-type]
+        callback.message,
+        callback.from_user.id,
         "👕 <b>Напиши ключевые вещи из твоего шкафа через запятую.</b>\n\n"
         "Например: <i>белая рубашка, черные прямые брюки, голубые джинсы</i>",
         parse_mode="HTML",
@@ -137,7 +151,9 @@ async def profile_key_items(callback: CallbackQuery, state: FSMContext) -> None:
 async def save_profile_key_items(message: Message, state: FSMContext) -> None:
     key_items = [item.strip() for item in (message.text or "").split(",") if item.strip()]
     storage.upsert_profile(message.from_user.id, key_items=key_items)
-    await message.answer(
+    await send_tracked_message(
+        message,
+        message.from_user.id,
         "Ключевые вещи сохранены. Теперь бот сможет чаще подбирать образы под них.",
         parse_mode="HTML",
         reply_markup=profile_keyboard(has_profile=True),

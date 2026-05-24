@@ -15,6 +15,7 @@ def start_keyboard(has_profile: bool = False) -> InlineKeyboardMarkup:
         [
             [InlineKeyboardButton(text="👚 Подобрать под мою вещь", callback_data="item_flow_start")],
             [InlineKeyboardButton(text="🔍 Проверить мой образ", callback_data="check_outfit")],
+            [InlineKeyboardButton(text="📂 Мои сохранённые", callback_data="show_saved")],
             [InlineKeyboardButton(text="🧬 Мой профиль", callback_data="profile_view")],
             [InlineKeyboardButton(text="✨ Premium", callback_data="premium_info")],
         ]
